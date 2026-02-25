@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# Generate self-signed test certificates for CI.
 set -euo pipefail
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -14,4 +13,3 @@ openssl req -new -x509 \
   -addext "subjectAltName=DNS:localhost,IP:127.0.0.1,IP:::1"
 
 echo "Generated server.crt and server.key in $DIR"
-
