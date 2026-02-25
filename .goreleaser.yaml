@@ -44,8 +44,31 @@ builds:
       - CGO_ENABLED=0
     ldflags:
       - -s -w
-    goos: [linux, darwin, windows]
-    goarch: [amd64, arm64]
+    goos: [linux, darwin, windows, freebsd]
+    goarch: [amd64, arm64, arm, mipsle, mips64le]
+    goarm: ["7"]
+    gomips: [softfloat]
+    ignore:
+      - goos: darwin
+        goarch: arm
+      - goos: darwin
+        goarch: mipsle
+      - goos: darwin
+        goarch: mips64le
+      - goos: windows
+        goarch: arm
+      - goos: windows
+        goarch: mipsle
+      - goos: windows
+        goarch: mips64le
+      - goos: freebsd
+        goarch: arm
+      - goos: freebsd
+        goarch: arm64
+      - goos: freebsd
+        goarch: mipsle
+      - goos: freebsd
+        goarch: mips64le
 
 archives:
   - id: default
