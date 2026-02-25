@@ -17,11 +17,6 @@ import (
 const wsMagicGUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 // WSTransport wraps a TLS connection with WebSocket framing.
-//
-// Use this transport when:
-// - Connecting through Cloudflare Workers (primary use case)
-// - The network path performs HTTP-level inspection
-// - You need the connection to look like a WebSocket session
 type WSTransport struct{}
 
 func (t *WSTransport) Name() string         { return "ws" }
@@ -57,14 +52,12 @@ func (t *WSTransport) Wrap(conn net.Conn, cfg *Config) (net.Conn, error) {
 	}
 	wsKey := base64.StdEncoding.EncodeToString(keyBytes)
 
-	// Build browser-realistic HTTP upgrade request
 	reqStr := fmt.Sprintf("GET %s HTTP/1.1\r\n", path)
 	reqStr += fmt.Sprintf("Host: %s\r\n", host)
 	reqStr += "Upgrade: websocket\r\n"
 	reqStr += "Connection: Upgrade\r\n"
 	reqStr += fmt.Sprintf("Sec-WebSocket-Key: %s\r\n", wsKey)
 	reqStr += "Sec-WebSocket-Version: 13\r\n"
-	// Browser-realistic headers to avoid detection
 	reqStr += "Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits\r\n"
 	if cfg.UserAgent != "" {
 		reqStr += fmt.Sprintf("User-Agent: %s\r\n", cfg.UserAgent)
@@ -100,8 +93,6 @@ func (t *WSTransport) Wrap(conn net.Conn, cfg *Config) (net.Conn, error) {
 	}
 
 	ws := newWSConn(conn, br)
-
-	// 启动心跳
 	go ws.keepAlive()
 
 	return ws, nil
@@ -114,22 +105,18 @@ func computeAcceptKey(key string) string {
 	return base64.StdEncoding.EncodeToString(h.Sum(nil))
 }
 
-// wsConn wraps a connection with WebSocket binary framing.
 type wsConn struct {
 	conn    net.Conn
 	br      *bufio.Reader
 	writeMu sync.Mutex
 
-	// 分片帧状态
 	fragmentBuf []byte
 	fragmenting bool
 
-	// 心跳
 	lastPong  atomic.Int64
 	closeCh   chan struct{}
 	closeOnce sync.Once
 
-	// Read state
 	readBuf []byte
 	readEOF bool
 }
@@ -153,18 +140,16 @@ func (c *wsConn) keepAlive() {
 		case <-c.closeCh:
 			return
 		case <-ticker.C:
-			// 检查最后一次 pong 时间
 			lastPong := time.Unix(0, c.lastPong.Load())
 			if time.Since(lastPong) > 90*time.Second {
-				c.Close()
+				_ = c.Close()
 				return
 			}
 
-			// 发送 ping
 			c.writeMu.Lock()
 			pingData := make([]byte, 8)
-			rand.Read(pingData)
-			writeFrame(c.conn, 0x09, pingData)
+			_, _ = rand.Read(pingData)
+			_, _ = writeFrame(c.conn, 0x09, pingData)
 			c.writeMu.Unlock()
 		}
 	}
@@ -188,7 +173,7 @@ func (c *wsConn) Read(p []byte) (int, error) {
 		}
 
 		switch opcode {
-		case 0x00: // continuation frame
+		case 0x00:
 			if c.fragmenting {
 				c.fragmentBuf = append(c.fragmentBuf, payload...)
 				if fin {
@@ -202,27 +187,27 @@ func (c *wsConn) Read(p []byte) (int, error) {
 				continue
 			}
 
-		case 0x01, 0x02: // text, binary
+		case 0x01, 0x02:
 			if !fin {
 				c.fragmenting = true
 				c.fragmentBuf = append([]byte(nil), payload...)
 				continue
 			}
 
-		case 0x08: // close
+		case 0x08:
 			c.readEOF = true
 			c.writeMu.Lock()
-			WriteCloseFrame(c.conn, 1000)
+			_, _ = WriteCloseFrame(c.conn, 1000)
 			c.writeMu.Unlock()
 			return 0, io.EOF
 
-		case 0x09: // ping
+		case 0x09:
 			c.writeMu.Lock()
-			writeFrame(c.conn, 0x0A, payload)
+			_, _ = writeFrame(c.conn, 0x0A, payload)
 			c.writeMu.Unlock()
 			continue
 
-		case 0x0A: // pong
+		case 0x0A:
 			c.lastPong.Store(time.Now().UnixNano())
 			continue
 
@@ -294,7 +279,7 @@ func (c *wsConn) Close() error {
 	c.closeOnce.Do(func() {
 		close(c.closeCh)
 		c.writeMu.Lock()
-		WriteCloseFrame(c.conn, 1000)
+		_, _ = WriteCloseFrame(c.conn, 1000)
 		c.writeMu.Unlock()
 	})
 	return c.conn.Close()
