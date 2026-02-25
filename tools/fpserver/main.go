@@ -1,4 +1,3 @@
-
 package main
 
 import (
@@ -29,15 +28,15 @@ import (
 
 // FingerprintReport is the JSON output returned to the client.
 type FingerprintReport struct {
-	JA3Raw           string `json:"ja3_raw"`
-	JA3Hash          string `json:"ja3_hash"`
-	ALPN             string `json:"alpn"`
-	SNI              string `json:"sni"`
-	TLSVersion       uint16 `json:"tls_version"`
-	CipherSuite      uint16 `json:"cipher_suite"`
-	H2Settings       string `json:"h2_settings,omitempty"`
-	H2WindowUpdate   uint32 `json:"h2_window_update,omitempty"`
-	H2PseudoOrder    string `json:"h2_pseudo_order,omitempty"`
+	JA3Raw         string `json:"ja3_raw"`
+	JA3Hash        string `json:"ja3_hash"`
+	ALPN           string `json:"alpn"`
+	SNI            string `json:"sni"`
+	TLSVersion     uint16 `json:"tls_version"`
+	CipherSuite    uint16 `json:"cipher_suite"`
+	H2Settings     string `json:"h2_settings,omitempty"`
+	H2WindowUpdate uint32 `json:"h2_window_update,omitempty"`
+	H2PseudoOrder  string `json:"h2_pseudo_order,omitempty"`
 }
 
 func main() {
@@ -399,6 +398,3 @@ func generateSelfSignedCert() (tls.Certificate, error) {
 		Leaf:        leaf,
 	}, nil
 }
-
-
-
