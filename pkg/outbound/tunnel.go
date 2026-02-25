@@ -264,7 +264,6 @@ func (t *TunnelManager) sendHTTPConnect(stream net.Conn, target string) error {
 	return nil
 }
 
-// relay copies data bidirectionally between client and proxy.
 func relay(client net.Conn, proxy net.Conn) int64 {
 	var wg sync.WaitGroup
 	var totalBytes int64
@@ -275,7 +274,7 @@ func relay(client net.Conn, proxy net.Conn) int64 {
 		n, _ := io.Copy(proxy, client)
 		atomic.AddInt64(&totalBytes, n)
 		if tc, ok := proxy.(interface{ CloseWrite() error }); ok {
-			tc.CloseWrite()
+			_ = tc.CloseWrite()
 		}
 	}()
 
@@ -284,7 +283,7 @@ func relay(client net.Conn, proxy net.Conn) int64 {
 		n, _ := io.Copy(client, proxy)
 		atomic.AddInt64(&totalBytes, n)
 		if tc, ok := client.(interface{ CloseWrite() error }); ok {
-			tc.CloseWrite()
+			_ = tc.CloseWrite()
 		}
 	}()
 
