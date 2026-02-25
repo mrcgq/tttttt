@@ -80,9 +80,8 @@ func main() {
 
 func handleConnection(rawConn net.Conn, tlsCfg *tls.Config) {
 	defer rawConn.Close()
-	rawConn.SetDeadline(time.Now().Add(10 * time.Second))
+	_ = rawConn.SetDeadline(time.Now().Add(10 * time.Second))
 
-	// Step 1: Read the TLS record containing ClientHello
 	recordHeader := make([]byte, 5)
 	if _, err := io.ReadFull(rawConn, recordHeader); err != nil {
 		log.Printf("read record header: %v", err)
@@ -100,11 +99,9 @@ func handleConnection(rawConn net.Conn, tlsCfg *tls.Config) {
 	}
 	rawClientHello := append(recordHeader, recordBody...)
 
-	// Step 2: Parse ClientHello for JA3
 	ja3Raw := parseJA3(recordBody)
 	ja3Hash := fmt.Sprintf("%x", md5.Sum([]byte(ja3Raw)))
 
-	// Step 3: Replay bytes to TLS server for handshake
 	replay := newReplayConn(rawConn, rawClientHello)
 	tlsConn := tls.Server(replay, tlsCfg)
 	if err := tlsConn.Handshake(); err != nil {
@@ -133,8 +130,6 @@ func handleConnection(rawConn net.Conn, tlsCfg *tls.Config) {
 	sendH2Response(tlsConn, &report)
 }
 
-// --- JA3 Parser ---
-
 func parseJA3(handshakeRecord []byte) string {
 	if len(handshakeRecord) < 4 || handshakeRecord[0] != 0x01 {
 		return ""
@@ -149,16 +144,14 @@ func parseJA3(handshakeRecord []byte) string {
 	}
 
 	tlsVersion := binary.BigEndian.Uint16(body[0:2])
-	pos := 2 + 32 // skip random
+	pos := 2 + 32
 
-	// Session ID
 	if pos >= len(body) {
 		return ""
 	}
 	sidLen := int(body[pos])
 	pos += 1 + sidLen
 
-	// Cipher Suites
 	if pos+2 > len(body) {
 		return ""
 	}
@@ -176,14 +169,12 @@ func parseJA3(handshakeRecord []byte) string {
 		}
 	}
 
-	// Compression Methods
 	if pos >= len(body) {
 		return ""
 	}
 	compLen := int(body[pos])
 	pos += 1 + compLen
 
-	// Extensions
 	var extensions []string
 	var curves []string
 	var pointFormats []string
@@ -212,7 +203,7 @@ func parseJA3(handshakeRecord []byte) string {
 			extData = extData[:extDataLen]
 
 			switch extType {
-			case 0x000a: // supported_groups
+			case 0x000a:
 				if len(extData) >= 2 {
 					listLen := int(binary.BigEndian.Uint16(extData[0:2]))
 					for j := 2; j+1 < 2+listLen && j+1 < len(extData); j += 2 {
@@ -222,7 +213,7 @@ func parseJA3(handshakeRecord []byte) string {
 						}
 					}
 				}
-			case 0x000b: // ec_point_formats
+			case 0x000b:
 				if len(extData) >= 1 {
 					fmtLen := int(extData[0])
 					for j := 1; j < 1+fmtLen && j < len(extData); j++ {
@@ -247,10 +238,7 @@ func isGREASE(val uint16) bool {
 	return (val&0x0f0f) == 0x0a0a && val&0x00ff == val>>8
 }
 
-// --- H2 Fingerprint Reader ---
-
 func readH2Fingerprint(conn net.Conn, report *FingerprintReport) {
-	// Read client preface magic (24 bytes)
 	magic := make([]byte, 24)
 	if _, err := io.ReadFull(conn, magic); err != nil {
 		log.Printf("h2: read magic: %v", err)
@@ -261,14 +249,13 @@ func readH2Fingerprint(conn net.Conn, report *FingerprintReport) {
 	framer.ReadMetaHeaders = hpack.NewDecoder(4096, nil)
 	framer.MaxHeaderListSize = 262144
 
-	// Send server SETTINGS (empty) immediately to unblock client
-	framer.WriteSettings()
+	_ = framer.WriteSettings()
 
 	var settingsParts []string
 	gotHeaders := false
 
 	for !gotHeaders {
-		conn.SetDeadline(time.Now().Add(5 * time.Second))
+		_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
 		f, err := framer.ReadFrame()
 		if err != nil {
 			log.Printf("h2: read frame: %v", err)
@@ -278,14 +265,13 @@ func readH2Fingerprint(conn net.Conn, report *FingerprintReport) {
 		switch fr := f.(type) {
 		case *http2.SettingsFrame:
 			if !fr.IsAck() {
-				fr.ForeachSetting(func(s http2.Setting) error {
+				_ = fr.ForeachSetting(func(s http2.Setting) error {
 					settingsParts = append(settingsParts,
 						fmt.Sprintf("%d:%d", s.ID, s.Val))
 					return nil
 				})
 				report.H2Settings = strings.Join(settingsParts, ";")
-				// ACK client settings
-				framer.WriteSettingsAck()
+				_ = framer.WriteSettingsAck()
 			}
 
 		case *http2.WindowUpdateFrame:
@@ -305,13 +291,11 @@ func readH2Fingerprint(conn net.Conn, report *FingerprintReport) {
 
 		case *http2.PingFrame:
 			if !fr.IsAck() {
-				framer.WritePing(true, fr.Data)
+				_ = framer.WritePing(true, fr.Data)
 			}
 		}
 	}
 }
-
-// --- Response Senders ---
 
 func sendH2Response(conn net.Conn, report *FingerprintReport) {
 	body, _ := json.MarshalIndent(report, "", "  ")
@@ -319,23 +303,23 @@ func sendH2Response(conn net.Conn, report *FingerprintReport) {
 	framer := http2.NewFramer(conn, conn)
 	var hpackBuf bytes.Buffer
 	enc := hpack.NewEncoder(&hpackBuf)
-	enc.WriteField(hpack.HeaderField{Name: ":status", Value: "200"})
-	enc.WriteField(hpack.HeaderField{Name: "content-type", Value: "application/json"})
-	enc.WriteField(hpack.HeaderField{Name: "content-length", Value: strconv.Itoa(len(body))})
+	_ = enc.WriteField(hpack.HeaderField{Name: ":status", Value: "200"})
+	_ = enc.WriteField(hpack.HeaderField{Name: "content-type", Value: "application/json"})
+	_ = enc.WriteField(hpack.HeaderField{Name: "content-length", Value: strconv.Itoa(len(body))})
 
-	framer.WriteHeaders(http2.HeadersFrameParam{
-		StreamID:      1, // respond on stream 1
+	_ = framer.WriteHeaders(http2.HeadersFrameParam{
+		StreamID:      1,
 		BlockFragment: hpackBuf.Bytes(),
 		EndStream:     false,
 		EndHeaders:    true,
 	})
-	framer.WriteData(1, true, body)
+	_ = framer.WriteData(1, true, body)
 }
 
 func sendH1Response(conn net.Conn, report *FingerprintReport) {
 	body, _ := json.MarshalIndent(report, "", "  ")
 	br := bufio.NewReader(conn)
-	br.ReadString('\n') // consume request line, best-effort
+	_, _ = br.ReadString('\n')
 
 	w := bufio.NewWriter(conn)
 	fmt.Fprintf(w, "HTTP/1.1 200 OK\r\n")
@@ -343,11 +327,9 @@ func sendH1Response(conn net.Conn, report *FingerprintReport) {
 	fmt.Fprintf(w, "Content-Length: %d\r\n", len(body))
 	fmt.Fprintf(w, "Connection: close\r\n")
 	fmt.Fprintf(w, "\r\n")
-	w.Write(body)
-	w.Flush()
+	_, _ = w.Write(body)
+	_ = w.Flush()
 }
-
-// --- Replay Connection ---
 
 type replayConn struct {
 	net.Conn
@@ -364,8 +346,6 @@ func newReplayConn(conn net.Conn, initial []byte) *replayConn {
 func (c *replayConn) Read(p []byte) (int, error) {
 	return c.reader.Read(p)
 }
-
-// --- Self-signed Cert Generator ---
 
 func generateSelfSignedCert() (tls.Certificate, error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
