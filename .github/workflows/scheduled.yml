@@ -1,0 +1,65 @@
+name: Scheduled
+ 
+on:
+  schedule:
+    - cron: go-string">"go-number">0 go-number">6 * * go-number">1"   # Every Monday go-number">06:go-number">00 UTC
+  workflow_dispatch:
+ 
+jobs:
+  vuln-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: go-string">"go-number">1.22.x"
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+      - name: Run vulnerability check
+        run: govulncheck ./...
+      - name: Check for outdated dependencies
+        run: |
+          echo go-string">"=== Checking for available updates ==="
+          go list -m -u all go-number">2>&go-number">1 | grep '\[' || echo go-string">"All dependencies up to date"
+ 
+  fingerprint-freshness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check fingerprint data age
+        run: |
+          echo go-string">"=== Fingerprint Profile Freshness Check ==="
+          echo go-string">""
+          echo go-string">"Profile files last modified:"
+          for f in pkg/fingerprint/chrome.go pkg/fingerprint/firefox.go \
+                   pkg/fingerprint/safari.go pkg/fingerprint/edge.go; do
+            if [ -f go-string">"$f" ]; then
+              mod_date=$(stat -c %Y go-string">"$f" go-number">2>/dev/null || stat -f %m go-string">"$f" go-number">2>/dev/null)
+              age_days=$(( ($(date +%s) - mod_date) / go-number">86400 ))
+              echo go-string">"  $f — $age_days days old"
+              if [ $age_days -gt go-number">90 ]; then
+                echo go-string">"    ⚠️  WARNING: File is over go-number">90 days old, profiles may be stale!"
+              fi
+            fi
+          done
+          echo go-string">""
+          echo go-string">"Chrome releases every ~go-number">4 weeks."
+          echo go-string">"Check https://tls.peet.ws for latest browser fingerprints."
+ 
+  expected-values-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: go-string">"go-number">1.22.x"
+      - name: Validate expected fingerprints
+        run: |
+          echo go-string">"=== Validating registered profiles against expected values ==="
+          go run ./tools/validate-fingerprints/ \
+            -expected testdata/expected_fingerprints.json || true
+			
+			
+			
+			
+			
