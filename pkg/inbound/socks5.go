@@ -13,16 +13,16 @@ import (
 )
 
 const (
-	socks5Version     = 0x05
-	socks5AuthNone    = 0x00
-	socks5CmdConnect  = 0x01
-	socks5CmdBind     = 0x02
-	socks5CmdUDPAssoc = 0x03
-	socks5AtypIPv4    = 0x01
-	socks5AtypDomain  = 0x03
-	socks5AtypIPv6    = 0x04
-	socks5RepSuccess  = 0x00
-	socks5RepFail     = 0x01
+	socks5Version      = 0x05
+	socks5AuthNone     = 0x00
+	socks5CmdConnect   = 0x01
+	socks5CmdBind      = 0x02
+	socks5CmdUDPAssoc  = 0x03
+	socks5AtypIPv4     = 0x01
+	socks5AtypDomain   = 0x03
+	socks5AtypIPv6     = 0x04
+	socks5RepSuccess   = 0x00
+	socks5RepFail      = 0x01
 	socks5RepCmdNotSup = 0x07
 )
 
@@ -41,14 +41,14 @@ type SOCKS5Stats struct {
 
 // SOCKS5Server implements a SOCKS5 proxy (RFC 1928).
 type SOCKS5Server struct {
-	Addr      string
-	Logger    *zap.Logger
-	OnConnect TunnelFunc
-	OnUDP     UDPRelayFunc
-	listener  net.Listener
-	udpConn   *net.UDPConn
-	wg        sync.WaitGroup
-	closeCh   chan struct{}
+	Addr       string
+	Logger     *zap.Logger
+	OnConnect  TunnelFunc
+	OnUDP      UDPRelayFunc
+	listener   net.Listener
+	udpConn    *net.UDPConn
+	wg         sync.WaitGroup
+	closeCh    chan struct{}
 
 	// Metrics
 	activeConns int64
@@ -147,7 +147,7 @@ func (s *SOCKS5Server) handleUDP() {
 			return
 		default:
 		}
-		s.udpConn.SetReadDeadline(time.Now().Add(1 * time.Second))
+		_ = s.udpConn.SetReadDeadline(time.Now().Add(1 * time.Second))
 		n, clientAddr, err := s.udpConn.ReadFromUDP(buf)
 		if err != nil {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
@@ -207,7 +207,7 @@ func (s *SOCKS5Server) handleUDP() {
 					return
 				}
 				if len(resp) > 0 {
-					s.udpConn.WriteToUDP(resp, addr)
+					_, _ = s.udpConn.WriteToUDP(resp, addr)
 				}
 			}(clientAddr, append([]byte(nil), data...), target)
 		}
@@ -229,7 +229,7 @@ func (s *SOCKS5Server) Stop() {
 
 func (s *SOCKS5Server) handleConn(conn net.Conn) {
 	defer conn.Close()
-	conn.SetDeadline(time.Now().Add(30 * time.Second))
+	_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
 
 	header := make([]byte, 2)
 	if _, err := io.ReadFull(conn, header); err != nil {
@@ -252,10 +252,10 @@ func (s *SOCKS5Server) handleConn(conn net.Conn) {
 		}
 	}
 	if !found {
-		conn.Write([]byte{socks5Version, 0xFF})
+		_, _ = conn.Write([]byte{socks5Version, 0xFF})
 		return
 	}
-	conn.Write([]byte{socks5Version, socks5AuthNone})
+	_, _ = conn.Write([]byte{socks5Version, socks5AuthNone})
 
 	req := make([]byte, 4)
 	if _, err := io.ReadFull(conn, req); err != nil {
@@ -279,7 +279,7 @@ func (s *SOCKS5Server) handleConn(conn net.Conn) {
 			zap.String("target", target),
 			zap.String("domain", domain))
 		s.sendReply(conn, socks5RepSuccess, nil)
-		conn.SetDeadline(time.Time{})
+		_ = conn.SetDeadline(time.Time{})
 		if s.OnConnect != nil {
 			s.OnConnect(conn, target, domain)
 		}
@@ -290,9 +290,9 @@ func (s *SOCKS5Server) handleConn(conn net.Conn) {
 		}
 		udpAddr := s.udpConn.LocalAddr().(*net.UDPAddr)
 		s.sendReply(conn, socks5RepSuccess, udpAddr)
-		conn.SetDeadline(time.Time{})
+		_ = conn.SetDeadline(time.Time{})
 		buf := make([]byte, 1)
-		conn.Read(buf) // block until client disconnects
+		_, _ = conn.Read(buf) // block until client disconnects
 	default:
 		s.sendReply(conn, socks5RepCmdNotSup, nil)
 	}
@@ -359,5 +359,5 @@ func (s *SOCKS5Server) sendReply(conn net.Conn, rep byte, bindAddr net.Addr) {
 	} else {
 		reply = append(reply, socks5AtypIPv4, 0, 0, 0, 0, 0, 0)
 	}
-	conn.Write(reply)
+	_, _ = conn.Write(reply)
 }
