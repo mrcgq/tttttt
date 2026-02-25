@@ -16,7 +16,6 @@ type ValidationResult struct {
 }
 
 // ValidateAll checks every registered profile for correctness.
-// Returns a list of validation results, one per profile.
 func ValidateAll() []ValidationResult {
 	var results []ValidationResult
 
@@ -33,27 +32,23 @@ func ValidateAll() []ValidationResult {
 func ValidateProfile(p *BrowserProfile) ValidationResult {
 	r := ValidationResult{ProfileName: p.Name, Valid: true}
 
-	// Basic validation
 	if err := p.Validate(); err != nil {
 		r.Valid = false
 		r.Errors = append(r.Errors, err.Error())
 		return r
 	}
 
-	// H2 validation
 	if err := p.H2.Validate(); err != nil {
 		r.Valid = false
 		r.Errors = append(r.Errors, fmt.Sprintf("H2 config: %v", err))
 	}
 
-	// Check for Go default H2 fingerprint (instant detection)
 	if DetectGoDefault(p) {
 		r.Valid = false
 		r.Errors = append(r.Errors,
 			"H2 settings match Go default — will be detected as non-browser")
 	}
 
-	// Warning: missing expected hashes (not blocking, but reduces CI coverage)
 	if p.ExpectedJA3Hash == "" {
 		r.Warnings = append(r.Warnings, "missing ExpectedJA3Hash (CI cannot verify TLS fingerprint)")
 	}
@@ -61,12 +56,10 @@ func ValidateProfile(p *BrowserProfile) ValidationResult {
 		r.Warnings = append(r.Warnings, "missing ExpectedH2FP (CI cannot verify H2 fingerprint)")
 	}
 
-	// Warning: missing version metadata
 	if p.Version == "" {
 		r.Warnings = append(r.Warnings, "missing Version metadata")
 	}
 
-	// Verify pseudo-header order matches browser family
 	order := strings.Join(p.H2.PseudoHeaderOrder, ",")
 	switch p.Browser {
 	case "chrome", "edge":
@@ -133,7 +126,6 @@ func CompareWithExpected(jsonPath string) ([]ValidationResult, error) {
 
 		r := ValidationResult{ProfileName: name, Valid: true}
 
-		// Compare H2 settings
 		actualSettings := p.H2.SettingsString()
 		if exp.H2Settings != "" && actualSettings != exp.H2Settings {
 			r.Valid = false
@@ -142,7 +134,6 @@ func CompareWithExpected(jsonPath string) ([]ValidationResult, error) {
 					actualSettings, exp.H2Settings))
 		}
 
-		// Compare window update
 		if exp.H2WindowUpdate > 0 && p.H2.WindowUpdateValue != exp.H2WindowUpdate {
 			r.Valid = false
 			r.Errors = append(r.Errors,
@@ -150,7 +141,6 @@ func CompareWithExpected(jsonPath string) ([]ValidationResult, error) {
 					p.H2.WindowUpdateValue, exp.H2WindowUpdate))
 		}
 
-		// Compare pseudo order
 		actualOrder := p.H2.PseudoOrderString()
 		if exp.H2PseudoOrder != "" && actualOrder != exp.H2PseudoOrder {
 			r.Valid = false
@@ -200,7 +190,7 @@ func GenerateReport() string {
 		}
 	}
 
-	sb.WriteString(fmt.Sprintf("\n───────────────────────────────────────\n"))
+	sb.WriteString("\n───────────────────────────────────────\n")
 	sb.WriteString(fmt.Sprintf("  Total: %d | Pass: %d | Fail: %d | Warnings: %d\n",
 		len(results), passCount, failCount, warnCount))
 	sb.WriteString("═══════════════════════════════════════\n")
