@@ -1,6 +1,3 @@
-
-
-
 package h2
 
 import (
@@ -50,32 +47,25 @@ type Client struct {
 	framer *http2.Framer
 	fp     *FingerprintConfig
 
-	// HPACK encoder (for request headers)
 	hpackBuf bytes.Buffer
 	hpackEnc *hpack.Encoder
 
-	// stream management
 	nextStreamID uint32
 	mu           sync.Mutex
 	streams      map[uint32]*stream
 
-	// write serialization
 	writeMu sync.Mutex
 
-	// connection state
-	state        int32 // atomic: stateActive, stateGoAway, stateClosed
+	state        int32
 	closeOnce    sync.Once
 	closeCh      chan struct{}
-	lastStreamID uint32 // from GOAWAY frame
+	lastStreamID uint32
 
-	// flow control
 	connSendWindow int64
-	serverInitWin  uint32 // server's INITIAL_WINDOW_SIZE
+	serverInitWin  uint32
 
-	// configuration
 	responseTimeout time.Duration
 
-	// metrics
 	metrics ClientMetrics
 }
 
@@ -84,18 +74,12 @@ type stream struct {
 	headers    chan *headerResult
 	data       chan *dataChunk
 	done       chan struct{}
-	sendWindow int64 // per-stream send window
+	sendWindow int64
 
-	// [BUG-2 FIX] sync.Once 保护 close(done)，防止 double close panic
 	doneOnce sync.Once
-
-	// [BUG-6 FIX] 标记 stream 是否已关闭，防止向已关闭的 channel 写入
-	closed atomic.Bool
+	closed   atomic.Bool
 }
 
-// closeDone safely closes the done channel exactly once.
-// [BUG-2 FIX] 无论被调用多少次（handleResponseData / handleRSTStream / 超时），
-// 都只会 close(done) 一次，永远不会 panic。
 func (s *stream) closeDone() {
 	s.doneOnce.Do(func() {
 		s.closed.Store(true)
@@ -103,8 +87,6 @@ func (s *stream) closeDone() {
 	})
 }
 
-// trySendHeaders attempts to send a header result to the stream.
-// [BUG-6 FIX] 如果 stream 已关闭，静默丢弃，不会 panic。
 func (s *stream) trySendHeaders(hr *headerResult) bool {
 	if s.closed.Load() {
 		return false
@@ -117,8 +99,6 @@ func (s *stream) trySendHeaders(hr *headerResult) bool {
 	}
 }
 
-// trySendData attempts to send a data chunk to the stream.
-// [BUG-6 FIX] 如果 stream 已关闭，静默丢弃，不会 panic。
 func (s *stream) trySendData(chunk *dataChunk) bool {
 	if s.closed.Load() {
 		return false
@@ -155,22 +135,18 @@ func NewClient(conn net.Conn, fp *FingerprintConfig) (*Client, error) {
 		responseTimeout: 30 * time.Second,
 	}
 
-	// Send custom preface with fingerprint-matched parameters
 	preface := BuildPreface(fp)
 	if _, err := conn.Write(preface); err != nil {
 		return nil, fmt.Errorf("h2: write preface: %w", err)
 	}
 
-	// Create framer for subsequent frames
 	c.framer = http2.NewFramer(conn, conn)
 	c.framer.SetMaxReadFrameSize(1 << 24)
 	c.framer.ReadMetaHeaders = hpack.NewDecoder(4096, nil)
 	c.framer.MaxHeaderListSize = 262144
 
-	// Init HPACK encoder
 	c.hpackEnc = hpack.NewEncoder(&c.hpackBuf)
 
-	// Start read loop
 	go c.readLoop()
 
 	return c, nil
@@ -242,7 +218,6 @@ func (c *Client) handleServerSettings(f *http2.SettingsFrame) {
 		return nil
 	})
 
-	// Update all existing stream windows when server changes INITIAL_WINDOW_SIZE
 	if hasNewInitWin {
 		c.mu.Lock()
 		oldInitWin := c.serverInitWin
@@ -254,7 +229,6 @@ func (c *Client) handleServerSettings(f *http2.SettingsFrame) {
 		c.mu.Unlock()
 	}
 
-	// ACK the server settings
 	c.writeMu.Lock()
 	_ = c.framer.WriteSettingsAck()
 	atomic.AddInt64(&c.metrics.FramesSent, 1)
@@ -292,11 +266,9 @@ func (c *Client) handleResponseHeaders(f *http2.MetaHeadersFrame) {
 		}
 	}
 
-	// [BUG-6 FIX] 使用 trySendHeaders 安全发送
 	s.trySendHeaders(&headerResult{status: status, headers: hdr})
 
 	if f.StreamEnded() {
-		// [BUG-2 FIX] 使用 closeDone() 安全关闭
 		s.closeDone()
 		atomic.AddInt64(&c.metrics.StreamsClosed, 1)
 	}
@@ -310,7 +282,6 @@ func (c *Client) handleResponseData(f *http2.DataFrame) {
 		return
 	}
 
-	// [BUG-6 FIX] 先检查 stream 是否已关闭
 	if s.closed.Load() {
 		return
 	}
@@ -320,7 +291,6 @@ func (c *Client) handleResponseData(f *http2.DataFrame) {
 
 	atomic.AddInt64(&c.metrics.BytesRead, int64(len(data)))
 
-	// Send WINDOW_UPDATE for flow control
 	n := uint32(len(data))
 	if n > 0 {
 		c.writeMu.Lock()
@@ -330,11 +300,9 @@ func (c *Client) handleResponseData(f *http2.DataFrame) {
 		c.writeMu.Unlock()
 	}
 
-	// [BUG-6 FIX] 使用 trySendData 安全发送
 	s.trySendData(&dataChunk{data: data, endStream: f.StreamEnded()})
 
 	if f.StreamEnded() {
-		// [BUG-2 FIX] 使用 closeDone() 安全关闭
 		s.closeDone()
 		atomic.AddInt64(&c.metrics.StreamsClosed, 1)
 	}
@@ -348,10 +316,7 @@ func (c *Client) handleRSTStream(f *http2.RSTStreamFrame) {
 		return
 	}
 
-	// [BUG-6 FIX] 使用 trySendHeaders 安全发送错误
 	s.trySendHeaders(&headerResult{err: ErrStreamReset})
-
-	// [BUG-2 FIX] 使用 closeDone() 安全关闭，不会重复 close
 	s.closeDone()
 	atomic.AddInt64(&c.metrics.StreamsClosed, 1)
 }
@@ -362,7 +327,6 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 		return nil, ErrClientClosed
 	}
 
-	// Allocate stream with server's initial window size
 	c.mu.Lock()
 	streamID := c.nextStreamID
 	c.nextStreamID += 2
@@ -383,7 +347,6 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 		c.mu.Unlock()
 	}()
 
-	// Encode headers with custom pseudo-header order
 	headerBlock, err := c.encodeHeaders(req)
 	if err != nil {
 		return nil, fmt.Errorf("h2: encode headers: %w", err)
@@ -410,7 +373,6 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 		}
 	}
 
-	// Wait for response headers with configurable timeout
 	select {
 	case hr := <-s.headers:
 		if hr.err != nil {
@@ -460,7 +422,6 @@ func (c *Client) encodeHeaders(req *http.Request) ([]byte, error) {
 		":path":      path,
 	}
 
-	// Write pseudo-headers in profile-specified order (fingerprint critical)
 	for _, key := range c.fp.PseudoHeaderOrder {
 		val, ok := pseudoValues[key]
 		if !ok {
@@ -469,7 +430,6 @@ func (c *Client) encodeHeaders(req *http.Request) ([]byte, error) {
 		c.hpackEnc.WriteField(hpack.HeaderField{Name: key, Value: val})
 	}
 
-	// Regular headers (skip hop-by-hop and pseudo-headers)
 	skipHeaders := map[string]bool{
 		"host": true, "transfer-encoding": true, "connection": true,
 		"keep-alive": true, "upgrade": true, "proxy-connection": true,
@@ -525,10 +485,8 @@ func (c *Client) closeInternal(err error) {
 		atomic.StoreInt32(&c.state, stateClosed)
 		close(c.closeCh)
 
-		// [BUG-6 FIX] 安全通知所有 pending streams
 		c.mu.Lock()
 		for _, s := range c.streams {
-			// 先发送错误，再标记关闭
 			s.trySendHeaders(&headerResult{err: ErrClientClosed})
 			s.closeDone()
 		}
@@ -614,10 +572,3 @@ func (b *streamBody) Close() error {
 		}
 	}
 }
-
-
-
-
-
-
-
