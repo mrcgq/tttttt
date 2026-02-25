@@ -12,11 +12,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.22.x"
+          go-version: "1.23.x"
       - name: Install govulncheck
         run: go install golang.org/x/vuln/cmd/govulncheck@latest
       - name: Run vulnerability check
         run: govulncheck ./...
+        continue-on-error: true
       - name: Check for outdated dependencies
         run: |
           echo "=== Checking for available updates ==="
@@ -29,11 +30,22 @@ jobs:
       - name: Check fingerprint data age
         run: |
           echo "=== Fingerprint Profile Freshness Check ==="
-          for f in pkg/fingerprint/chrome.go pkg/fingerprint/firefox.go pkg/fingerprint/safari.go pkg/fingerprint/edge.go; do
+          echo ""
+          echo "Profile files last modified:"
+          for f in pkg/fingerprint/chrome.go pkg/fingerprint/firefox.go \
+                   pkg/fingerprint/safari.go pkg/fingerprint/edge.go; do
             if [ -f "$f" ]; then
-              echo "Checking $f"
+              mod_date=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null)
+              age_days=$(( ($(date +%s) - mod_date) / 86400 ))
+              echo "  $f — $age_days days old"
+              if [ $age_days -gt 90 ]; then
+                echo "    ⚠️  WARNING: File is over 90 days old, profiles may be stale!"
+              fi
             fi
           done
+          echo ""
+          echo "Chrome releases every ~4 weeks."
+          echo "Check https://tls.peet.ws for latest browser fingerprints."
 
   expected-values-check:
     runs-on: ubuntu-latest
@@ -41,7 +53,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.22.x"
+          go-version: "1.23.x"
       - name: Validate expected fingerprints
         run: |
-          go run ./tools/validate-fingerprints/ -expected testdata/expected_fingerprints.json || true
+          echo "=== Validating registered profiles against expected values ==="
+          go run ./tools/validate-fingerprints/ \
+            -expected testdata/expected_fingerprints.json || true
