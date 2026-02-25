@@ -7,15 +7,11 @@ LDFLAGS  := -s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.da
 
 .PHONY: build test lint clean cross fpserver validate bench fmt tidy docker
 
-# ─── Primary targets ──────────────────────────────────
-
 build:
 	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o dist/$(BINARY) ./cmd/tls-client/
 
 fpserver:
 	CGO_ENABLED=0 go build -trimpath -o dist/fpserver ./tools/fpserver/
-
-# ─── Quality targets ──────────────────────────────────
 
 test:
 	go test -v -race -count=1 ./...
@@ -30,8 +26,6 @@ validate:
 	@echo "==> Validating all fingerprint profiles..."
 	go run ./tools/validate-fingerprints/
 
-# ─── Convenience targets ─────────────────────────────
-
 fmt:
 	gofmt -s -w .
 	goimports -w .
@@ -42,8 +36,6 @@ tidy:
 
 clean:
 	rm -rf dist/
-
-# ─── Cross-compilation ───────────────────────────────
 
 cross:
 	@echo ">>> linux/amd64"
@@ -58,8 +50,6 @@ cross:
 	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags="$(LDFLAGS)" -o dist/$(BINARY)-windows-amd64.exe ./cmd/tls-client/
 	@echo ">>> linux/mipsle"
 	CGO_ENABLED=0 GOOS=linux GOARCH=mipsle GOMIPS=softfloat go build -trimpath -ldflags="$(LDFLAGS)" -o dist/$(BINARY)-linux-mipsle ./cmd/tls-client/
-
-# ─── Docker ───────────────────────────────────────────
 
 docker:
 	docker build -t tls-client:$(VERSION) .
