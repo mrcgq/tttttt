@@ -1,0 +1,52 @@
+{
+  go-string">"_meta": {
+    go-string">"description": go-string">"Expected HTTP/go-number">2 fingerprint values for CI verification",
+    go-string">"last_updated": go-string">"go-number">2024-go-number">06-go-number">15",
+    go-string">"source": go-string">"Manual browser capture + tls.peet.ws verification",
+    go-string">"note": go-string">"Update when browsers change. Chrome releases every ~go-number">4 weeks."
+  },
+  go-string">"profiles": {
+    go-string">"chrome-go-number">124-win": {
+      go-string">"h2_settings": go-string">"go-number">1:go-number">65536;go-number">2:go-number">0;go-number">3:go-number">1000;go-number">4:go-number">6291456;go-number">6:go-number">262144",
+      go-string">"h2_window_update": go-number">15663105,
+      go-string">"h2_pseudo_order": go-string">":method,:authority,:scheme,:path"
+    },
+    go-string">"chrome-go-number">126-win": {
+      go-string">"h2_settings": go-string">"go-number">1:go-number">65536;go-number">2:go-number">0;go-number">3:go-number">1000;go-number">4:go-number">6291456;go-number">6:go-number">262144",
+      go-string">"h2_window_update": go-number">15663105,
+      go-string">"h2_pseudo_order": go-string">":method,:authority,:scheme,:path"
+    },
+    go-string">"chrome-go-number">126-android": {
+      go-string">"h2_settings": go-string">"go-number">1:go-number">65536;go-number">2:go-number">0;go-number">3:go-number">1000;go-number">4:go-number">6291456;go-number">6:go-number">262144",
+      go-string">"h2_window_update": go-number">15663105,
+      go-string">"h2_pseudo_order": go-string">":method,:authority,:scheme,:path"
+    },
+    go-string">"edge-go-number">126-win": {
+      go-string">"h2_settings": go-string">"go-number">1:go-number">65536;go-number">2:go-number">0;go-number">3:go-number">1000;go-number">4:go-number">6291456;go-number">6:go-number">262144",
+      go-string">"h2_window_update": go-number">15663105,
+      go-string">"h2_pseudo_order": go-string">":method,:authority,:scheme,:path"
+    },
+    go-string">"firefox-go-number">124-win": {
+      go-string">"h2_settings": go-string">"go-number">1:go-number">65536;go-number">4:go-number">131072;go-number">5:go-number">16384",
+      go-string">"h2_window_update": go-number">12517377,
+      go-string">"h2_pseudo_order": go-string">":method,:path,:authority,:scheme"
+    },
+    go-string">"firefox-go-number">127-win": {
+      go-string">"h2_settings": go-string">"go-number">1:go-number">65536;go-number">4:go-number">131072;go-number">5:go-number">16384",
+      go-string">"h2_window_update": go-number">12517377,
+      go-string">"h2_pseudo_order": go-string">":method,:path,:authority,:scheme"
+    },
+    go-string">"safari-go-number">17-mac": {
+      go-string">"h2_settings": go-string">"go-number">1:go-number">4096;go-number">2:go-number">0;go-number">3:go-number">100;go-number">4:go-number">2097152;go-number">5:go-number">16384",
+      go-string">"h2_window_update": go-number">10420225,
+      go-string">"h2_pseudo_order": go-string">":method,:scheme,:path,:authority"
+    },
+    go-string">"safari-go-number">175-mac": {
+      go-string">"h2_settings": go-string">"go-number">1:go-number">4096;go-number">2:go-number">0;go-number">3:go-number">100;go-number">4:go-number">2097152;go-number">5:go-number">16384",
+      go-string">"h2_window_update": go-number">10420225,
+      go-string">"h2_pseudo_order": go-string">":method,:scheme,:path,:authority"
+    }
+  }
+}
+
+
