@@ -1,4 +1,3 @@
-
 package transport
 
 import (
@@ -165,7 +164,7 @@ func (c *wsConn) keepAlive() {
 			c.writeMu.Lock()
 			pingData := make([]byte, 8)
 			rand.Read(pingData)
-			writeFrame(c.conn, 0x09, pingData) // ping 是控制帧，始终 FIN=1
+			writeFrame(c.conn, 0x09, pingData)
 			c.writeMu.Unlock()
 		}
 	}
@@ -182,7 +181,6 @@ func (c *wsConn) Read(p []byte) (int, error) {
 	}
 
 	for {
-		// [BUG-1 FIX] 使用修复后的 readFrame，正确获取 FIN 位
 		opcode, payload, fin, err := readFrame(c.br)
 		if err != nil {
 			c.readEOF = true
@@ -193,41 +191,34 @@ func (c *wsConn) Read(p []byte) (int, error) {
 		case 0x00: // continuation frame
 			if c.fragmenting {
 				c.fragmentBuf = append(c.fragmentBuf, payload...)
-				// [BUG-1 FIX] 只有 FIN=1 时才完成重组
 				if fin {
 					c.fragmenting = false
 					payload = c.fragmentBuf
 					c.fragmentBuf = nil
-					// 继续到下方返回 payload
 				} else {
-					// 还有后续分片，继续读
 					continue
 				}
 			} else {
-				// 收到 continuation 但没在分片中，忽略
 				continue
 			}
 
 		case 0x01, 0x02: // text, binary
-			// [BUG-1 FIX] FIN=0 表示这是分片消息的第一帧
 			if !fin {
 				c.fragmenting = true
 				c.fragmentBuf = append([]byte(nil), payload...)
 				continue
 			}
-			// FIN=1，完整的单帧消息，直接返回
 
 		case 0x08: // close
 			c.readEOF = true
-			// Echo close frame back (per RFC 6455)
 			c.writeMu.Lock()
 			WriteCloseFrame(c.conn, 1000)
 			c.writeMu.Unlock()
 			return 0, io.EOF
 
-		case 0x09: // ping — 控制帧总是 FIN=1
+		case 0x09: // ping
 			c.writeMu.Lock()
-			writeFrame(c.conn, 0x0A, payload) // pong
+			writeFrame(c.conn, 0x0A, payload)
 			c.writeMu.Unlock()
 			continue
 
@@ -256,14 +247,6 @@ func (c *wsConn) Write(p []byte) (int, error) {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
 
-	// [BUG-5 FIX] 完整修复分片发送的 FIN/opcode 控制
-	//
-	// RFC 6455 分片规则：
-	//   第一帧：opcode=实际类型(0x02)，FIN=0（如果有后续帧）
-	//   中间帧：opcode=0x00(continuation)，FIN=0
-	//   最后帧：opcode=0x00(continuation)，FIN=1
-	//   单帧消息：opcode=实际类型(0x02)，FIN=1
-
 	const maxFrameSize = 16384
 	total := 0
 	remaining := p
@@ -282,24 +265,19 @@ func (c *wsConn) Write(p []byte) (int, error) {
 		var fin bool
 
 		if isFirstFrame && isLastFrame {
-			// 单帧消息：opcode=0x02, FIN=1
 			opcode = 0x02
 			fin = true
 		} else if isFirstFrame && !isLastFrame {
-			// 分片第一帧：opcode=0x02, FIN=0
 			opcode = 0x02
 			fin = false
 		} else if !isFirstFrame && isLastFrame {
-			// 分片最后帧：opcode=0x00, FIN=1
 			opcode = 0x00
 			fin = true
 		} else {
-			// 分片中间帧：opcode=0x00, FIN=0
 			opcode = 0x00
 			fin = false
 		}
 
-		// [BUG-5 FIX] 使用 writeFrameBytes 独立控制 FIN 位
 		n, err := writeFrameBytes(c.conn, fin, opcode, chunk)
 		if err != nil {
 			return total, err
@@ -316,7 +294,7 @@ func (c *wsConn) Close() error {
 	c.closeOnce.Do(func() {
 		close(c.closeCh)
 		c.writeMu.Lock()
-		WriteCloseFrame(c.conn, 1000) // 正常关闭
+		WriteCloseFrame(c.conn, 1000)
 		c.writeMu.Unlock()
 	})
 	return c.conn.Close()
