@@ -144,22 +144,22 @@ func (c *h2StreamConn) sendHeaders() error {
 		if authority == "" {
 			authority = c.host
 		}
-		enc.WriteField(hpack.HeaderField{Name: ":method", Value: "CONNECT"})
-		enc.WriteField(hpack.HeaderField{Name: ":authority", Value: authority})
+		_ = enc.WriteField(hpack.HeaderField{Name: ":method", Value: "CONNECT"})
+		_ = enc.WriteField(hpack.HeaderField{Name: ":authority", Value: authority})
 	} else {
-		enc.WriteField(hpack.HeaderField{Name: ":method", Value: "POST"})
-		enc.WriteField(hpack.HeaderField{Name: ":authority", Value: c.host})
-		enc.WriteField(hpack.HeaderField{Name: ":scheme", Value: "https"})
-		enc.WriteField(hpack.HeaderField{Name: ":path", Value: c.path})
+		_ = enc.WriteField(hpack.HeaderField{Name: ":method", Value: "POST"})
+		_ = enc.WriteField(hpack.HeaderField{Name: ":authority", Value: c.host})
+		_ = enc.WriteField(hpack.HeaderField{Name: ":scheme", Value: "https"})
+		_ = enc.WriteField(hpack.HeaderField{Name: ":path", Value: c.path})
 	}
 
 	if c.ua != "" {
-		enc.WriteField(hpack.HeaderField{Name: "user-agent", Value: c.ua})
+		_ = enc.WriteField(hpack.HeaderField{Name: "user-agent", Value: c.ua})
 	}
 
 	if !c.isProxyMode {
-		enc.WriteField(hpack.HeaderField{Name: "content-type", Value: "application/grpc"})
-		enc.WriteField(hpack.HeaderField{Name: "te", Value: "trailers"})
+		_ = enc.WriteField(hpack.HeaderField{Name: "content-type", Value: "application/grpc"})
+		_ = enc.WriteField(hpack.HeaderField{Name: "te", Value: "trailers"})
 	}
 
 	headerBlock := hpackBuf.Bytes()
@@ -227,7 +227,7 @@ func (c *h2StreamConn) readConnectResponse() error {
 				c.parseSettings(payload)
 				ack := []byte{0, 0, 0, 0x04, 0x01, 0, 0, 0, 0}
 				c.writeMu.Lock()
-				c.conn.Write(ack)
+				_, _ = c.conn.Write(ack)
 				c.writeMu.Unlock()
 			}
 
@@ -237,7 +237,7 @@ func (c *h2StreamConn) readConnectResponse() error {
 				copy(pong, []byte{0, 0, 8, 0x06, 0x01, 0, 0, 0, 0})
 				copy(pong[9:], payload)
 				c.writeMu.Lock()
-				c.conn.Write(pong)
+				_, _ = c.conn.Write(pong)
 				c.writeMu.Unlock()
 			}
 
@@ -313,7 +313,7 @@ func (c *h2StreamConn) Read(p []byte) (int, error) {
 				c.parseSettings(payload)
 				ack := []byte{0, 0, 0, 0x04, 0x01, 0, 0, 0, 0}
 				c.writeMu.Lock()
-				c.conn.Write(ack)
+				_, _ = c.conn.Write(ack)
 				c.writeMu.Unlock()
 			}
 			continue
@@ -324,7 +324,7 @@ func (c *h2StreamConn) Read(p []byte) (int, error) {
 				copy(pong, []byte{0, 0, 8, 0x06, 0x01, 0, 0, 0, 0})
 				copy(pong[9:], payload)
 				c.writeMu.Lock()
-				c.conn.Write(pong)
+				_, _ = c.conn.Write(pong)
 				c.writeMu.Unlock()
 			}
 			continue
@@ -452,7 +452,7 @@ func (c *h2StreamConn) sendWindowUpdate(streamID, increment uint32) {
 	frame[12] = byte(increment)
 
 	c.writeMu.Lock()
-	c.conn.Write(frame)
+	_, _ = c.conn.Write(frame)
 	c.writeMu.Unlock()
 }
 
