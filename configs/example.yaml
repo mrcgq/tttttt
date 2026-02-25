@@ -1,64 +1,60 @@
-# tls-client configuration — Phase go-number">3+ Upgraded
+# tls-client configuration — Phase 3+ Upgraded
 global:
   log_level: info
-  log_output: stderr        # or go-string">"file:/var/log/tls-client.log"
+  log_output: stderr        # or "file:/var/log/tls-client.log"
   metrics:
     enabled: false
-    endpoint: go-string">"go-number">127.0.go-number">0.1:go-number">9091"
- 
+    endpoint: "127.0.0.1:9091"
+
 inbound:
   socks5:
-    listen: go-number">127.0.go-number">0.1:go-number">1080
+    listen: 127.0.0.1:1080
   http:
-    listen: go-number">127.0.go-number">0.1:go-number">8080
- 
+    listen: 127.0.0.1:8080
+
 fingerprint:
   rotation:
     mode: fixed              # fixed | random | per-domain | weighted | timed
-    profile: chrome-go-number">126-win  # default profile for fixed mode
+    profile: chrome-126-win  # default profile for fixed mode
     # profiles:              # for rotation modes:
-    #   - chrome-go-number">126-win
-    #   - firefox-go-number">127-win
-    #   - safari-go-number">175-mac
-    # interval: go-string">"5m"         # for timed mode
- 
+    #   - chrome-126-win
+    #   - firefox-127-win
+    #   - safari-175-mac
+    # interval: "5m"         # for timed mode
+
 tls:
   verify_mode: sni-skip      # strict | sni-skip | insecure | pin
   # verify_opts:
-  #   cert_pin: go-string">"ab12cd34..."  # SHA256 of leaf cert(for pin mode)
-  #   custom_ca: go-string">"/path/to/ca.pem"
- 
+  #   cert_pin: "ab12cd34..."  # SHA256 of leaf cert (for pin mode)
+  #   custom_ca: "/path/to/ca.pem"
+
 nodes:
   # ============================================================
-  # Cloudflare Worker with WebSocket transport(PRIMARY)
+  # Cloudflare Worker with WebSocket transport (PRIMARY)
   # ============================================================
   - name: cf-worker
-    address: go-string">"go-number">104.16.go-number">132.229:go-number">443"                # CF optimized IP
-    sni: go-string">"${CF_WORKER_DOMAIN}"                   # Environment variable
+    address: "104.16.132.229:443"                # CF optimized IP
+    sni: "${CF_WORKER_DOMAIN}"                   # Environment variable
     transport: ws
     transport_opts:
-      ws_path: go-string">"/"
-      ws_host: go-string">"${CF_WORKER_DOMAIN}"
+      ws_path: "/"
+      ws_host: "${CF_WORKER_DOMAIN}"
     retry:
-      max_attempts: go-number">3
-      base_delay: go-string">"500ms"
-      max_delay: go-string">"5s"
+      max_attempts: 3
+      base_delay: "500ms"
+      max_delay: "5s"
     pool:
-      max_idle: go-number">5
-      idle_timeout: go-string">"120s"
-      max_lifetime: go-string">"10m"
+      max_idle: 5
+      idle_timeout: "120s"
+      max_lifetime: "10m"
     active: true
- 
+
   # ============================================================
-  # Self-hosted VPS with raw CONNECT(BACKUP)
+  # Self-hosted VPS with raw CONNECT (BACKUP)
   # ============================================================
   # - name: my-vps
-  #   address: go-string">"go-number">45.67.go-number">89.100:go-number">443"
-  #   sni: go-string">"cover-domain.com"
+  #   address: "45.67.89.100:443"
+  #   sni: "cover-domain.com"
   #   transport: raw
-  #   fingerprint: firefox-go-number">127-win    # override global fingerprint
+  #   fingerprint: firefox-127-win    # override global fingerprint
   #   active: false
-  
-  
-  
-  
