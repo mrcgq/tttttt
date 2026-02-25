@@ -36,7 +36,6 @@ type ConnPool struct {
 	cfg    PoolConfig
 	closed bool
 
-	// metrics
 	expiredCount int64
 }
 
@@ -96,7 +95,6 @@ func (p *ConnPool) Get(ctx context.Context, key string, cfg *DialConfig) (net.Co
 			continue
 		}
 
-		// Check if connection is expired (idle or max lifetime)
 		if now.Sub(entry.lastUsed) > p.cfg.IdleTimeout ||
 			now.Sub(entry.createdAt) > p.cfg.MaxLifetime {
 			entry.conn.Close()
@@ -105,7 +103,6 @@ func (p *ConnPool) Get(ctx context.Context, key string, cfg *DialConfig) (net.Co
 			continue
 		}
 
-		// Health probe
 		if !p.probeConnection(entry.conn) {
 			entry.conn.Close()
 			entries = append(entries[:i], entries[i+1:]...)
@@ -139,7 +136,8 @@ func (p *ConnPool) probeConnection(conn net.Conn) bool {
 	}
 
 	n, err := conn.Read(probe)
-	conn.SetReadDeadline(time.Time{})
+
+	_ = conn.SetReadDeadline(time.Time{})
 
 	if n > 0 {
 		return false
@@ -291,7 +289,6 @@ func (p *ConnPool) Stats() PoolStats {
 	return stats
 }
 
-// pooledConn wraps a connection to return it to pool on close.
 type pooledConn struct {
 	net.Conn
 	pool     *ConnPool
