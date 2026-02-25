@@ -153,20 +153,9 @@ func (t *TunnelManager) HandleConnect(clientConn net.Conn, target, domain string
 		activeTransport = t.Node.Transport
 		transportName := activeTransport.Name()
 
-		// [SECURITY FIX] H2 代理模式特殊处理
-		//
-		// 当使用 H2 传输层且配置为代理模式时：
-		//   - 将 target 传入 Config.Target
-		//   - H2 传输层会发送 HPACK 压缩的 CONNECT 请求
-		//   - 而不是明文的 "CONNECT xxx:443 HTTP/1.1"
-		//
-		// 这样做的安全优势：
-		//   - 二进制化：CONNECT 被 HPACK 压缩，无明文特征
-		//   - 动态变化：HPACK 动态表使每次字节序列不同
-		//   - 完全拟态：与浏览器 H2 流量 100% 一致
 		if transportName == "h2" && t.Node.TransportCfg.IsProxyMode() {
 			h2Cfg := t.Node.TransportCfg.Clone()
-			h2Cfg.Target = target // 设置代理目标
+			h2Cfg.Target = target
 
 			stream, err = t.Node.Transport.Wrap(tlsConn, h2Cfg)
 			if err != nil {
@@ -179,8 +168,6 @@ func (t *TunnelManager) HandleConnect(clientConn net.Conn, target, domain string
 				return
 			}
 
-			// H2 代理模式不需要额外发送 target
-			// HEADERS 帧中的 :authority 已包含目标地址
 			t.Logger.Debug("tunnel: established (h2 proxy mode)",
 				zap.String("node", t.Node.Name),
 				zap.String("target", target))
@@ -191,7 +178,6 @@ func (t *TunnelManager) HandleConnect(clientConn net.Conn, target, domain string
 			return
 		}
 
-		// 非 H2 代理模式：正常 Wrap
 		stream, err = t.Node.Transport.Wrap(tlsConn, t.Node.TransportCfg)
 		if err != nil {
 			tlsConn.Close()
@@ -214,7 +200,6 @@ func (t *TunnelManager) HandleConnect(clientConn net.Conn, target, domain string
 			return
 		}
 	case "h2":
-		// H2 隧道模式（Worker POST）仍然需要发送 target
 		if err := t.sendH2Target(stream, target); err != nil {
 			atomic.AddInt64(&t.stats.TotalErrors, 1)
 			t.Logger.Error("tunnel: send h2 target failed", zap.Error(err))
@@ -312,8 +297,3 @@ func (t *TunnelManager) Close() {
 		t.Pool.Close()
 	}
 }
-
-
-
-
-
