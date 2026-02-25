@@ -1,4 +1,3 @@
-
 package engine
 
 import (
@@ -32,10 +31,10 @@ func DefaultPoolConfig() PoolConfig {
 
 // ConnPool manages reusable TLS connections with health checking.
 type ConnPool struct {
-	mu          sync.Mutex
-	conns       map[string][]*poolEntry
-	cfg         PoolConfig
-	closed      bool
+	mu     sync.Mutex
+	conns  map[string][]*poolEntry
+	cfg    PoolConfig
+	closed bool
 
 	// metrics
 	expiredCount int64
@@ -106,21 +105,7 @@ func (p *ConnPool) Get(ctx context.Context, key string, cfg *DialConfig) (net.Co
 			continue
 		}
 
-		// [BUG-4 FIX] 真实的健康探测，替代原来的 SetReadDeadline 假检查
-		//
-		// 原始代码的问题：
-		//   SetReadDeadline 只检查了 conn 对象是否有效（非 nil，未 close）
-		//   但无法检测：
-		//   - 对端已关闭连接（TCP FIN/RST 已到达但未被读取）
-		//   - 网络中断（路由变化、NAT 超时）
-		//   - TLS 连接已被服务端超时关闭
-		//
-		// 修复方案：
-		//   1. 设置极短的读超时（1ms）
-		//   2. 尝试读取 1 字节
-		//   3. 如果返回 EOF / 非超时错误 → 连接已死
-		//   4. 如果返回超时错误 → 连接仍然存活（没有待读数据是正常的）
-		//   5. 如果成功读到数据 → 异常（不应该有未请求的数据），视为不健康
+		// Health probe
 		if !p.probeConnection(entry.conn) {
 			entry.conn.Close()
 			entries = append(entries[:i], entries[i+1:]...)
@@ -146,47 +131,28 @@ func (p *ConnPool) Get(ctx context.Context, key string, cfg *DialConfig) (net.Co
 	return p.dial(ctx, cfg)
 }
 
-// probeConnection performs a real health check on a connection.
-//
-// [BUG-4 FIX] 核心探测逻辑：
-//
-//	对于 TLS/TCP 连接，尝试短超时读取来检测对端状态：
-//	- 超时错误 = 连接正常（对端没有发送数据是预期行为）
-//	- EOF = 对端已关闭
-//	- 其他错误 = 连接异常
-//	- 读到数据 = 意外数据，视为不健康
 func (p *ConnPool) probeConnection(conn net.Conn) bool {
 	probe := make([]byte, 1)
 
-	// 设置极短的读超时
 	if err := conn.SetReadDeadline(time.Now().Add(1 * time.Millisecond)); err != nil {
-		// SetReadDeadline 失败 → conn 对象已损坏
 		return false
 	}
 
 	n, err := conn.Read(probe)
-
-	// 立即恢复无限制的 deadline
 	conn.SetReadDeadline(time.Time{})
 
 	if n > 0 {
-		// 读到了意外数据（在连接池中不应该有未请求的数据）
-		// 这通常意味着服务端发送了 close notify 或 GOAWAY
 		return false
 	}
 
 	if err == nil {
-		// 读了 0 字节且无错误，理论上不会发生
 		return true
 	}
 
-	// 判断错误类型
 	if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-		// 超时 = 没有待读数据 = 连接正常存活
 		return true
 	}
 
-	// EOF / connection reset / 其他错误 = 连接已死
 	return false
 }
 
@@ -328,16 +294,13 @@ func (p *ConnPool) Stats() PoolStats {
 // pooledConn wraps a connection to return it to pool on close.
 type pooledConn struct {
 	net.Conn
-	pool  *ConnPool
-	key   string
-	entry *poolEntry
-	// [BUG-4 附带修复] 用 atomic 保护 released，防止并发 Close
+	pool     *ConnPool
+	key      string
+	entry    *poolEntry
 	released atomic.Bool
 }
 
 func (c *pooledConn) Close() error {
-	// [BUG-4 附带修复] 原始代码用 bool 无并发保护
-	// 两个 goroutine 同时 Close 可能导致 double release
 	if !c.released.CompareAndSwap(false, true) {
 		return nil
 	}
@@ -368,5 +331,3 @@ func DialForProxy(ctx context.Context, address, sni string, profile *fingerprint
 	}
 	return result.Conn, result.NegProto, nil
 }
-
-
