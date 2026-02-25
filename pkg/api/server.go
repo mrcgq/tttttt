@@ -20,7 +20,7 @@ import (
 // Server is the management API HTTP server.
 type Server struct {
 	Addr      string
-	Token     string // Bearer token for authentication (empty = no auth)
+	Token     string
 	Logger    *zap.Logger
 	Checker   *health.Checker
 	StartTime time.Time
@@ -48,17 +48,15 @@ func (s *Server) SetHealthChecker(c *health.Checker) {
 func (s *Server) Start() error {
 	mux := http.NewServeMux()
 
-	// API endpoints
 	mux.HandleFunc("/api/status", s.auth(s.handleStatus))
 	mux.HandleFunc("/api/proxies", s.auth(s.handleProxies))
 	mux.HandleFunc("/api/fingerprints", s.auth(s.handleFingerprints))
 	mux.HandleFunc("/api/transports", s.auth(s.handleTransports))
 	mux.HandleFunc("/api/dial-metrics", s.auth(s.handleDialMetrics))
 
-	// Health check (no auth required)
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
+		_, _ = w.Write([]byte("ok"))
 	})
 
 	s.server = &http.Server{
@@ -87,7 +85,6 @@ func (s *Server) Stop() error {
 	return nil
 }
 
-// auth wraps a handler with Bearer token authentication.
 func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt64(&s.requests, 1)
@@ -97,7 +94,7 @@ func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 			if !strings.HasPrefix(auth, "Bearer ") || auth[7:] != s.Token {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusUnauthorized)
-				json.NewEncoder(w).Encode(map[string]string{
+				_ = json.NewEncoder(w).Encode(map[string]string{
 					"error": "unauthorized",
 				})
 				return
@@ -121,20 +118,20 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 			"sys_mb":         mem.Sys / 1024 / 1024,
 			"gc_cycles":      mem.NumGC,
 		},
-		"api_requests":   atomic.LoadInt64(&s.requests),
-		"go_version":     runtime.Version(),
-		"profiles_count": fingerprint.Count(),
+		"api_requests":    atomic.LoadInt64(&s.requests),
+		"go_version":      runtime.Version(),
+		"profiles_count":  fingerprint.Count(),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(status)
+	_ = json.NewEncoder(w).Encode(status)
 }
 
 func (s *Server) handleProxies(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	if s.Checker == nil {
-		json.NewEncoder(w).Encode(map[string]string{
+		_ = json.NewEncoder(w).Encode(map[string]string{
 			"error": "health checker not configured",
 		})
 		return
@@ -157,7 +154,7 @@ func (s *Server) handleProxies(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"proxies":   proxies,
 		"best_node": s.Checker.BestNode(),
 	})
@@ -181,7 +178,7 @@ func (s *Server) handleFingerprints(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"profiles": profiles,
 		"count":    len(profiles),
 		"default":  fingerprint.DefaultProfile(),
@@ -205,7 +202,7 @@ func (s *Server) handleTransports(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"transports": transports,
 	})
 }
@@ -219,7 +216,7 @@ func (s *Server) handleDialMetrics(w http.ResponseWriter, r *http.Request) {
 		avgLatencyMs = (metrics.TotalLatency / metrics.SuccessCount) / int64(time.Millisecond)
 	}
 
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"success_count":  metrics.SuccessCount,
 		"failure_count":  metrics.FailureCount,
 		"avg_latency_ms": avgLatencyMs,
