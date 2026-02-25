@@ -39,7 +39,7 @@ func runProxy(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	defer logger.Sync()
+	defer func() { _ = logger.Sync() }()
 
 	vmode, err := verify.ParseMode(cfg.TLS.VerifyMode)
 	if err != nil {
