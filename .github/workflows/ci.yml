@@ -1,11 +1,11 @@
 name: CI
- 
+
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
- 
+
 jobs:
   lint:
     runs-on: ubuntu-latest
@@ -13,18 +13,18 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: go-string">"go-number">1.22.x"
+          go-version: "1.22.x"
       - uses: golangci/golangci-lint-action@v6
         with:
           version: latest
- 
+
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: go-string">"go-number">1.22.x"
+          go-version: "1.22.x"
       - name: Run tests
         run: go test -v -race -coverprofile=coverage.txt ./...
       - name: Upload coverage
@@ -34,19 +34,19 @@ jobs:
           files: coverage.txt
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
- 
+
   security:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: go-string">"go-number">1.22.x"
+          go-version: "1.22.x"
       - name: Install govulncheck
         run: go install golang.org/x/vuln/cmd/govulncheck@latest
       - name: Run vulnerability check
         run: govulncheck ./...
- 
+
   build-matrix:
     runs-on: ubuntu-latest
     strategy:
@@ -72,33 +72,33 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: go-string">"go-number">1.22.x"
+          go-version: "1.22.x"
       - name: Build
         env:
-          CGO_ENABLED: go-string">"go-number">0"
+          CGO_ENABLED: "0"
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           GOMIPS: ${{ matrix.gomips }}
         run: |
-          go build -trimpath -ldflags=go-string">"-s -w" -o /dev/null ./cmd/tls-client/
-          echo go-string">"✅ ${{ matrix.goos }}/${{ matrix.goarch }} compiled OK"
- 
+          go build -trimpath -ldflags="-s -w" -o /dev/null ./cmd/tls-client/
+          echo "✅ ${{ matrix.goos }}/${{ matrix.goarch }} compiled OK"
+
   integration-fingerprint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: go-string">"go-number">1.22.x"
+          go-version: "1.22.x"
       - name: Build fpserver
         run: go build -o dist/fpserver ./tools/fpserver/
       - name: Start fpserver
         run: |
-          ./dist/fpserver -addr go-number">127.0.go-number">0.1:go-number">18443 &
-          sleep go-number">2
+          ./dist/fpserver -addr 127.0.0.1:18443 &
+          sleep 2
       - name: Run fingerprint verification tests
-        run: go test -v -run TestFingerprint ./pkg/engine/ -count=go-number">1
+        run: go test -v -run TestFingerprint ./pkg/engine/ -count=1
       - name: Validate all fingerprint profiles
         run: |
           go run -v ./tools/validate-fingerprints/ || true
-          echo go-string">"✅ Fingerprint validation complete"
+          echo "✅ Fingerprint validation complete"
