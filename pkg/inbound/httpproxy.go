@@ -94,7 +94,7 @@ func (s *HTTPProxyServer) Stop() {
 
 func (s *HTTPProxyServer) handleConn(conn net.Conn) {
 	defer conn.Close()
-	conn.SetDeadline(time.Now().Add(30 * time.Second))
+	_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
 
 	br := bufio.NewReaderSize(conn, 4096)
 	req, err := http.ReadRequest(br)
@@ -103,7 +103,7 @@ func (s *HTTPProxyServer) handleConn(conn net.Conn) {
 	}
 
 	if req.Method != http.MethodConnect {
-		conn.Write([]byte("HTTP/1.1 405 Method Not Allowed\r\n" +
+		_, _ = conn.Write([]byte("HTTP/1.1 405 Method Not Allowed\r\n" +
 			"Proxy-Agent: tls-client\r\n" +
 			"Content-Length: 0\r\n\r\n"))
 		return
@@ -119,9 +119,9 @@ func (s *HTTPProxyServer) handleConn(conn net.Conn) {
 		zap.String("target", target),
 		zap.String("domain", domain))
 
-	conn.Write([]byte("HTTP/1.1 200 Connection established\r\n" +
+	_, _ = conn.Write([]byte("HTTP/1.1 200 Connection established\r\n" +
 		"Proxy-Agent: tls-client\r\n\r\n"))
-	conn.SetDeadline(time.Time{})
+	_ = conn.SetDeadline(time.Time{})
 
 	if s.OnConnect != nil {
 		s.OnConnect(conn, target, domain)
