@@ -1,5 +1,9 @@
 version: 2
 
+before:
+  hooks:
+    - go mod tidy
+
 builds:
   - id: tls-client
     main: ./cmd/tls-client/
@@ -77,10 +81,22 @@ archives:
       - goos: windows
         format: zip
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}"
+    files:
+      - README.md
+      - LICENSE*
+      - configs/example.yaml
 
 checksum:
   name_template: "checksums.txt"
   algorithm: sha256
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
 
 release:
   github:
@@ -88,3 +104,4 @@ release:
     name: tls-client
   draft: false
   prerelease: auto
+  name_template: "{{.ProjectName}} v{{.Version}}"
