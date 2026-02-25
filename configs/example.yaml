@@ -1,7 +1,7 @@
-# tls-client configuration — Phase 3+ Upgraded
+# tls-client configuration
 global:
   log_level: info
-  log_output: stderr        # or "file:/var/log/tls-client.log"
+  log_output: stderr
   metrics:
     enabled: false
     endpoint: "127.0.0.1:9091"
@@ -14,31 +14,20 @@ inbound:
 
 fingerprint:
   rotation:
-    mode: fixed              # fixed | random | per-domain | weighted | timed
-    profile: chrome-126-win  # default profile for fixed mode
-    # profiles:              # for rotation modes:
-    #   - chrome-126-win
-    #   - firefox-127-win
-    #   - safari-175-mac
-    # interval: "5m"         # for timed mode
+    mode: fixed
+    profile: chrome-126-win
 
 tls:
-  verify_mode: sni-skip      # strict | sni-skip | insecure | pin
-  # verify_opts:
-  #   cert_pin: "ab12cd34..."  # SHA256 of leaf cert (for pin mode)
-  #   custom_ca: "/path/to/ca.pem"
+  verify_mode: sni-skip
 
 nodes:
-  # ============================================================
-  # Cloudflare Worker with WebSocket transport (PRIMARY)
-  # ============================================================
   - name: cf-worker
-    address: "104.16.132.229:443"                # CF optimized IP
-    sni: "${CF_WORKER_DOMAIN}"                   # Environment variable
+    address: "104.16.132.229:443"
+    sni: "your-worker.example.workers.dev"
     transport: ws
     transport_opts:
       ws_path: "/"
-      ws_host: "${CF_WORKER_DOMAIN}"
+      ws_host: "your-worker.example.workers.dev"
     retry:
       max_attempts: 3
       base_delay: "500ms"
@@ -48,13 +37,3 @@ nodes:
       idle_timeout: "120s"
       max_lifetime: "10m"
     active: true
-
-  # ============================================================
-  # Self-hosted VPS with raw CONNECT (BACKUP)
-  # ============================================================
-  # - name: my-vps
-  #   address: "45.67.89.100:443"
-  #   sni: "cover-domain.com"
-  #   transport: raw
-  #   fingerprint: firefox-127-win    # override global fingerprint
-  #   active: false
