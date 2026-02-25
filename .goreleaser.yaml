@@ -1,27 +1,20 @@
 version: 2
 
 builds:
-  # ============================================================
-  # 1. 主程序: tls-client (代理核心)
-  # ============================================================
   - id: tls-client
     main: ./cmd/tls-client/
     binary: tls-client
     env:
       - CGO_ENABLED=0
-    # 注入版本号和编译时间
     ldflags:
       - -s -w
       - -X main.version={{.Version}}
       - -X main.commit={{.ShortCommit}}
       - -X main.date={{.Date}}
-    # ✅ 支持：Linux, Mac, Win, FreeBSD
     goos: [linux, darwin, windows, freebsd]
-    # ✅ 支持：PC(amd64), 苹果M芯片(arm64), 老设备(arm), 软路由(mipsle/64le)
     goarch: [amd64, arm64, arm, mipsle, mips64le]
-    goarm: ["7"]        # 针对 ARMv7 (树莓派等)
-    gomips: [softfloat] # 针对 MIPS (软浮点，兼容性更好)
-    # 🚫 忽略不合法的组合 (必须加，否则 MIPS 编译会报错)
+    goarm: ["7"]
+    gomips: [softfloat]
     ignore:
       - goos: darwin
         goarch: arm
@@ -44,72 +37,31 @@ builds:
       - goos: freebsd
         goarch: mips64le
 
-  # ============================================================
-  # 2. 辅助工具: fpserver (指纹探针)
-  #    现在也支持路由器和老旧设备了！
-  # ============================================================
   - id: fpserver
     main: ./tools/fpserver/
     binary: fpserver
     env:
       - CGO_ENABLED=0
-    # 探针不需要注入太多版本信息，减小体积
     ldflags:
       - -s -w
-    # ✅ 这里的配置现在完全对齐主程序，确保路由器也能跑服务端
-    goos: [linux, darwin, windows, freebsd]
-    goarch: [amd64, arm64, arm, mipsle, mips64le]
-    goarm: ["7"]
-    gomips: [softfloat]
-    # 🚫 同样的忽略规则复制一份
-    ignore:
-      - goos: darwin
-        goarch: arm
-      - goos: darwin
-        goarch: mipsle
-      - goos: darwin
-        goarch: mips64le
-      - goos: windows
-        goarch: arm
-      - goos: windows
-        goarch: mipsle
-      - goos: windows
-        goarch: mips64le
-      - goos: freebsd
-        goarch: arm
-      - goos: freebsd
-        goarch: arm64
-      - goos: freebsd
-        goarch: mipsle
-      - goos: freebsd
-        goarch: mips64le
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
 
 archives:
   - id: default
     format: tar.gz
-    # Windows 使用 zip 格式
     format_overrides:
       - goos: windows
         format: zip
-    # 自动命名包：项目名_版本_系统_架构.后缀
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}"
-    # 将包含同一架构的所有 binary (tls-client + fpserver 会在同一个包里，或者分开取决于 id)
-    # GoReleaser 默认行为：如果多个 build 产出，且没有单独指定 archive匹配规则，
-    # 可能会打出包含两个二进制的包，或者分别打包。
-    # 为了清晰，这里默认配置通常会生成：
-    # tls-client_1.0.0_linux_mipsle.tar.gz (里面包含 tls-client)
-    # fpserver_1.0.0_linux_mipsle.tar.gz (里面包含 fpserver)
 
 checksum:
   name_template: "checksums.txt"
   algorithm: sha256
 
-# ⚠️ 首次发布前请替换为你的 GitHub 用户名和仓库名
 release:
   github:
     owner: YOUR_GITHUB_USERNAME
     name: tls-client
   draft: false
   prerelease: auto
-  
-  
