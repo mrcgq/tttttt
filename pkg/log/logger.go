@@ -8,10 +8,13 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
+// New creates a zap.Logger from a level and output string.
+// output can be "stderr", "stdout", or "file:/path/to/log".
 func New(level string) (*zap.Logger, error) {
 	return NewWithOutput(level, "stderr")
 }
 
+// NewWithOutput creates a zap.Logger with specified output.
 func NewWithOutput(level, output string) (*zap.Logger, error) {
 	var lvl zapcore.Level
 	switch level {
@@ -27,6 +30,7 @@ func NewWithOutput(level, output string) (*zap.Logger, error) {
 		return nil, fmt.Errorf("log: unknown level %q", level)
 	}
 
+	// Determine output paths
 	outputPaths := []string{"stderr"}
 	errorPaths := []string{"stderr"}
 
@@ -62,9 +66,11 @@ func NewWithOutput(level, output string) (*zap.Logger, error) {
 		},
 	}
 
+	// Add stack traces for error level and above
 	return cfg.Build(zap.AddStacktrace(zapcore.ErrorLevel))
 }
 
+// NewNop creates a no-op logger for testing.
 func NewNop() *zap.Logger {
 	return zap.NewNop()
 }
