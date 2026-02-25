@@ -2,8 +2,7 @@
   "_meta": {
     "description": "Expected HTTP/2 fingerprint values for CI verification",
     "last_updated": "2024-06-15",
-    "source": "Manual browser capture + tls.peet.ws verification",
-    "note": "Update when browsers change. Chrome releases every ~4 weeks."
+    "source": "Manual browser capture + tls.peet.ws verification"
   },
   "profiles": {
     "chrome-124-win": {
@@ -16,32 +15,12 @@
       "h2_window_update": 15663105,
       "h2_pseudo_order": ":method,:authority,:scheme,:path"
     },
-    "chrome-126-android": {
-      "h2_settings": "1:65536;2:0;3:1000;4:6291456;6:262144",
-      "h2_window_update": 15663105,
-      "h2_pseudo_order": ":method,:authority,:scheme,:path"
-    },
-    "edge-126-win": {
-      "h2_settings": "1:65536;2:0;3:1000;4:6291456;6:262144",
-      "h2_window_update": 15663105,
-      "h2_pseudo_order": ":method,:authority,:scheme,:path"
-    },
-    "firefox-124-win": {
-      "h2_settings": "1:65536;4:131072;5:16384",
-      "h2_window_update": 12517377,
-      "h2_pseudo_order": ":method,:path,:authority,:scheme"
-    },
     "firefox-127-win": {
       "h2_settings": "1:65536;4:131072;5:16384",
       "h2_window_update": 12517377,
       "h2_pseudo_order": ":method,:path,:authority,:scheme"
     },
     "safari-17-mac": {
-      "h2_settings": "1:4096;2:0;3:100;4:2097152;5:16384",
-      "h2_window_update": 10420225,
-      "h2_pseudo_order": ":method,:scheme,:path,:authority"
-    },
-    "safari-175-mac": {
       "h2_settings": "1:4096;2:0;3:100;4:2097152;5:16384",
       "h2_window_update": 10420225,
       "h2_pseudo_order": ":method,:scheme,:path,:authority"
