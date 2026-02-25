@@ -8,20 +8,36 @@ import (
 	"fmt"
 )
 
+// Mode defines certificate verification behavior.
 type Mode string
 
 const (
-	ModeStrict   Mode = "strict"
-	ModeSNISkip  Mode = "sni-skip"
+	// ModeStrict verifies certificate chain AND requires CN/SAN to match SNI.
+	ModeStrict Mode = "strict"
+
+	// ModeSNISkip verifies certificate chain but does NOT require CN/SAN to match SNI.
+	// This is the correct mode for domain fronting / SNI spoofing.
+	ModeSNISkip Mode = "sni-skip"
+
+	// ModeInsecure skips all certificate verification. Use only for testing.
 	ModeInsecure Mode = "insecure"
-	ModePin      Mode = "pin"
+
+	// ModePin verifies certificate chain AND checks leaf cert SHA256 pin.
+	ModePin Mode = "pin"
 )
 
+// Options holds additional verification options.
 type Options struct {
-	CustomRoots    *x509.CertPool
+	// CustomRoots is an optional custom root CA pool.
+	// If nil, system roots are used.
+	CustomRoots *x509.CertPool
+
+	// PinnedCertHash is the expected SHA256 hash of the leaf certificate (hex-encoded).
+	// Only used when Mode is ModePin.
 	PinnedCertHash string
 }
 
+// ParseMode parses a string into a Mode value.
 func ParseMode(s string) (Mode, error) {
 	switch Mode(s) {
 	case ModeStrict, ModeSNISkip, ModeInsecure, ModePin:
@@ -33,6 +49,8 @@ func ParseMode(s string) (Mode, error) {
 	}
 }
 
+// ApplyToTLSConfig configures certificate verification on a tls.Config.
+// sni is the SNI value that will be sent (may differ from the actual target domain).
 func ApplyToTLSConfig(cfg *tls.Config, mode Mode, sni string, opts *Options) {
 	cfg.ServerName = sni
 
@@ -63,6 +81,7 @@ func ApplyToTLSConfig(cfg *tls.Config, mode Mode, sni string, opts *Options) {
 			}
 			verifyOpts := x509.VerifyOptions{
 				Intermediates: x509.NewCertPool(),
+				// No DNSName check - intentional for domain fronting
 			}
 			if opts.CustomRoots != nil {
 				verifyOpts.Roots = opts.CustomRoots
@@ -84,12 +103,14 @@ func ApplyToTLSConfig(cfg *tls.Config, mode Mode, sni string, opts *Options) {
 			if len(rawCerts) == 0 {
 				return fmt.Errorf("verify[pin]: server presented no certificates")
 			}
+			// Check pin against leaf certificate
 			hash := sha256.Sum256(rawCerts[0])
 			actualPin := hex.EncodeToString(hash[:])
 			if opts.PinnedCertHash != "" && actualPin != opts.PinnedCertHash {
 				return fmt.Errorf("verify[pin]: certificate pin mismatch (got %s, want %s)",
 					actualPin[:16]+"...", opts.PinnedCertHash[:16]+"...")
 			}
+			// Also verify chain
 			certs := make([]*x509.Certificate, len(rawCerts))
 			for i, raw := range rawCerts {
 				c, err := x509.ParseCertificate(raw)
