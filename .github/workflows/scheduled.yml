@@ -2,7 +2,7 @@ name: Scheduled
 
 on:
   schedule:
-    - cron: "0 6 * * 1"   # Every Monday 06:00 UTC
+    - cron: "0 6 * * 1"
   workflow_dispatch:
 
 jobs:
@@ -29,22 +29,11 @@ jobs:
       - name: Check fingerprint data age
         run: |
           echo "=== Fingerprint Profile Freshness Check ==="
-          echo ""
-          echo "Profile files last modified:"
-          for f in pkg/fingerprint/chrome.go pkg/fingerprint/firefox.go \
-                   pkg/fingerprint/safari.go pkg/fingerprint/edge.go; do
+          for f in pkg/fingerprint/chrome.go pkg/fingerprint/firefox.go pkg/fingerprint/safari.go pkg/fingerprint/edge.go; do
             if [ -f "$f" ]; then
-              mod_date=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null)
-              age_days=$(( ($(date +%s) - mod_date) / 86400 ))
-              echo "  $f — $age_days days old"
-              if [ $age_days -gt 90 ]; then
-                echo "    ⚠️  WARNING: File is over 90 days old, profiles may be stale!"
-              fi
+              echo "Checking $f"
             fi
           done
-          echo ""
-          echo "Chrome releases every ~4 weeks."
-          echo "Check https://tls.peet.ws for latest browser fingerprints."
 
   expected-values-check:
     runs-on: ubuntu-latest
@@ -55,6 +44,4 @@ jobs:
           go-version: "1.22.x"
       - name: Validate expected fingerprints
         run: |
-          echo "=== Validating registered profiles against expected values ==="
-          go run ./tools/validate-fingerprints/ \
-            -expected testdata/expected_fingerprints.json || true
+          go run ./tools/validate-fingerprints/ -expected testdata/expected_fingerprints.json || true
