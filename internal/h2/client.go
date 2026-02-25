@@ -427,7 +427,7 @@ func (c *Client) encodeHeaders(req *http.Request) ([]byte, error) {
 		if !ok {
 			continue
 		}
-		c.hpackEnc.WriteField(hpack.HeaderField{Name: key, Value: val})
+		_ = c.hpackEnc.WriteField(hpack.HeaderField{Name: key, Value: val})
 	}
 
 	skipHeaders := map[string]bool{
@@ -440,7 +440,7 @@ func (c *Client) encodeHeaders(req *http.Request) ([]byte, error) {
 			continue
 		}
 		for _, v := range vals {
-			c.hpackEnc.WriteField(hpack.HeaderField{Name: lk, Value: v})
+			_ = c.hpackEnc.WriteField(hpack.HeaderField{Name: lk, Value: v})
 		}
 	}
 
