@@ -120,7 +120,6 @@ func Dial(ctx context.Context, cfg *DialConfig) (*DialResult, error) {
 	var lastErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		if attempt > 1 {
-			// Exponential backoff with jitter
 			delay := baseDelay * time.Duration(1<<uint(attempt-2))
 			if delay > maxDelay {
 				delay = maxDelay
@@ -146,7 +145,6 @@ func Dial(ctx context.Context, cfg *DialConfig) (*DialResult, error) {
 		lastErr = err
 		atomic.AddInt64(&globalDialMetrics.FailureCount, 1)
 
-		// Don't retry context cancellation
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
@@ -158,20 +156,20 @@ func Dial(ctx context.Context, cfg *DialConfig) (*DialResult, error) {
 func dialOnce(ctx context.Context, cfg *DialConfig) (*DialResult, error) {
 	start := time.Now()
 
-	// TCP connect
+	// 1. TCP Connect
 	dialer := &net.Dialer{Timeout: cfg.Timeout}
 	rawConn, err := dialer.DialContext(ctx, "tcp", cfg.Address)
 	if err != nil {
 		return nil, fmt.Errorf("engine: tcp dial %s: %w", cfg.Address, err)
 	}
 
-	// Build TLS config
+	// 2. Build TLS Config
 	tlsCfg := &tls.Config{
 		NextProtos: cfg.ALPN,
 	}
 	verify.ApplyToTLSConfig(tlsCfg, cfg.VerifyMode, cfg.SNI, cfg.VerifyOpts)
 
-	// utls connection with fingerprint
+	// 3. Create uTLS Client with fingerprint
 	tlsConn := utls.UClient(rawConn, &utls.Config{
 		ServerName:            cfg.SNI,
 		NextProtos:            cfg.ALPN,
@@ -181,37 +179,30 @@ func dialOnce(ctx context.Context, cfg *DialConfig) (*DialResult, error) {
 	}, cfg.Profile.ClientHelloID)
 
 	// ========================================================================
-	// [CRITICAL FIX] 强制 ALPN 锁定 (全平台通用修复)
+	// [CRITICAL FIX] 强制同步 ALPN (全平台修复)
 	//
-	// 问题：uTLS 应用 Chrome 指纹时，会强制覆盖 ALPN 为 ["h2", "http/1.1"]
-	// 后果：Cloudflare 选择 H2，但 WebSocket 需要 HTTP/1.1，导致协议冲突
-	// 解决：在握手前，强制将指纹中的 ALPN 扩展替换为我们传输层要求的协议
-	//
-	// 这样做的好处：
-	// 1. TLS 指纹（加密套件、扩展顺序等）依然保持 Chrome 特征
-	// 2. 仅修改 ALPN 列表，模拟"禁用 H2 的 Chrome"（真实存在的场景）
-	// 3. Cloudflare 被迫降级到 HTTP/1.1，WebSocket 握手成功
+	// 此段代码的作用是防止 uTLS 的浏览器指纹模板强行添加它自带的协议（如 h2）。
+	// 它会强制使 TLS 握手发送的 ALPN 列表与我们 Transport 层要求的完全一致。
 	// ========================================================================
 	if err := tlsConn.BuildHandshakeState(); err != nil {
 		rawConn.Close()
 		return nil, fmt.Errorf("engine: build handshake state: %w", err)
 	}
 
-	// 遍历所有 TLS 扩展，找到 ALPN 扩展并强制覆盖
 	for _, ext := range tlsConn.Extensions {
 		if alpnExt, ok := ext.(*utls.ALPNExtension); ok {
-			// cfg.ALPN 来自传输层（如 ws.go 返回 ["http/1.1"]）
+			// 强制覆盖：如果是 WS 模式这里就是 ["http/1.1"]，如果是 H2 模式这里就是 ["h2"]
 			alpnExt.AlpnProtocols = cfg.ALPN
 			break
 		}
 	}
 	// ========================================================================
 
-	// Handshake with timeout
+	// 4. Handshake with timeout
 	handshakeCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
 	defer cancel()
 	if err := tlsConn.HandshakeContext(handshakeCtx); err != nil {
-		rawConn.Close()
+		_ = rawConn.Close()
 		return nil, fmt.Errorf("engine: tls handshake to %s (sni=%s): %w",
 			cfg.Address, cfg.SNI, err)
 	}
