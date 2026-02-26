@@ -51,7 +51,7 @@ builds:
       - openbsd_386
       - openbsd_arm64
       - openbsd_arm_7
-      - openbsd_mips64
+      # ❌ 移除: openbsd_mips64 - Go 1.24 交叉编译存在 bug
       # ============ NetBSD ============
       - netbsd_amd64_v1
       - netbsd_386
@@ -69,16 +69,14 @@ builds:
       - CGO_ENABLED=0
     ldflags:
       - -s -w
-    targets: *all_targets          # YAML 锚点复用，与 tls-client 完全相同
+    targets: *all_targets
 
 archives:
   - id: default
-    # ✅ v2 语法：formats（列表），替代已弃用的 format（字符串）
     formats:
       - tar.gz
     format_overrides:
       - goos: windows
-        # ✅ v2 语法：formats（列表）
         formats:
           - zip
     name_template: >-
@@ -100,7 +98,6 @@ changelog:
       - "^test:"
       - "^ci:"
 
-# ✅ 关键修复：删除硬编码的 owner/name，让 goreleaser 从 git remote 自动检测
 release:
   draft: false
   prerelease: auto
