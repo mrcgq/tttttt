@@ -17,51 +17,29 @@ import (
 
 // DialConfig holds parameters for a single TLS dial operation.
 type DialConfig struct {
-	// Address is the target IP:Port to connect to.
-	Address string
-
-	// SNI is the Server Name Indication value in the TLS ClientHello.
-	SNI string
-
-	// Profile selects the TLS fingerprint.
-	Profile *fingerprint.BrowserProfile
-
-	// VerifyMode controls certificate verification.
+	Address    string
+	SNI        string
+	Profile    *fingerprint.BrowserProfile
 	VerifyMode verify.Mode
-
-	// VerifyOpts holds additional verification options.
 	VerifyOpts *verify.Options
-
-	// Timeout for the entire dial+handshake.
-	Timeout time.Duration
-
-	// ALPN protocols to negotiate (default: ["h2", "http/1.1"]).
-	ALPN []string
-
-	// Retry configures automatic retry behavior.
-	Retry *RetryConfig
+	Timeout    time.Duration
+	ALPN       []string
+	Retry      *RetryConfig
 }
 
 // RetryConfig controls retry behavior for failed dial attempts.
 type RetryConfig struct {
-	// MaxAttempts is the maximum number of dial attempts (default 1 = no retry).
 	MaxAttempts int
-
-	// BaseDelay is the initial delay between retries (default 500ms).
-	BaseDelay time.Duration
-
-	// MaxDelay is the maximum delay between retries (default 10s).
-	MaxDelay time.Duration
-
-	// Jitter adds randomness to delay (0.0 to 1.0, default 0.2).
-	Jitter float64
+	BaseDelay   time.Duration
+	MaxDelay    time.Duration
+	Jitter      float64
 }
 
 // DialResult holds the result of a TLS dial operation.
 type DialResult struct {
 	Conn     net.Conn
 	TLSConn  *utls.UConn
-	NegProto string // negotiated ALPN protocol
+	NegProto string
 	Latency  time.Duration
 	Attempts int
 }
@@ -70,7 +48,7 @@ type DialResult struct {
 type DialMetrics struct {
 	SuccessCount int64
 	FailureCount int64
-	TotalLatency int64 // nanoseconds
+	TotalLatency int64
 }
 
 var globalDialMetrics DialMetrics
@@ -120,14 +98,12 @@ func Dial(ctx context.Context, cfg *DialConfig) (*DialResult, error) {
 	var lastErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		if attempt > 1 {
-			// Exponential backoff with jitter
 			delay := baseDelay * time.Duration(1<<uint(attempt-2))
 			if delay > maxDelay {
 				delay = maxDelay
 			}
 			jitterDelta := time.Duration(float64(delay) * jitter * (2*rand.Float64() - 1))
 			delay += jitterDelta
-
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()
@@ -146,7 +122,6 @@ func Dial(ctx context.Context, cfg *DialConfig) (*DialResult, error) {
 		lastErr = err
 		atomic.AddInt64(&globalDialMetrics.FailureCount, 1)
 
-		// Don't retry context cancellation
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
@@ -182,10 +157,6 @@ func dialOnce(ctx context.Context, cfg *DialConfig) (*DialResult, error) {
 
 	// ========================================================================
 	// [CRITICAL FIX] Force ALPN lock (universal fix for all platforms)
-	//
-	// Problem: uTLS applies browser fingerprint ALPN ["h2", "http/1.1"]
-	// Effect:  Cloudflare picks H2, but WebSocket needs HTTP/1.1
-	// Fix:     Override ALPN extension, then re-serialize ClientHello
 	// ========================================================================
 	if err := tlsConn.BuildHandshakeState(); err != nil {
 		rawConn.Close()
