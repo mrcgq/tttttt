@@ -209,11 +209,11 @@ func dialOnce(ctx context.Context, cfg *DialConfig) (*DialResult, error) {
 		}
 	}
 	
-	// ✅ 关键修复：重新序列化 ClientHello，使 ALPN 修改生效
+	
     if err := tlsConn.MarshalClientHello(); err != nil {
     rawConn.Close()
     return nil, fmt.Errorf("engine: marshal client hello: %w", err)
-}
+    }
 	// ========================================================================
 
 	// Handshake with timeout
@@ -227,7 +227,12 @@ func dialOnce(ctx context.Context, cfg *DialConfig) (*DialResult, error) {
 
 	negProto := tlsConn.ConnectionState().NegotiatedProtocol
 	
-
+	
+    if len(cfg.ALPN) == 1 && cfg.ALPN[0] == "http/1.1" && negProto == "h2" {
+    rawConn.Close()
+    return nil, fmt.Errorf(
+        "engine: ALPN mismatch: requested [http/1.1] but negotiated h2")
+    }
 
 	return &DialResult{
 		Conn:     tlsConn,
