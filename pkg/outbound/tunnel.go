@@ -119,6 +119,10 @@ func (t *TunnelManager) HandleConnect(clientConn net.Conn, target, domain string
 	atomic.AddInt64(&t.stats.ActiveConns, 1)
 	defer atomic.AddInt64(&t.stats.ActiveConns, -1)
 
+	t.Logger.Info("tunnel: new connection",
+		zap.String("target", target),
+		zap.String("domain", domain))
+
 	var stream net.Conn
 	var activeTransport transport.Transport
 	var err error
@@ -141,7 +145,12 @@ func (t *TunnelManager) HandleConnect(clientConn net.Conn, target, domain string
 		}
 		activeTransport = usedTransport
 	} else {
-		tlsConn, err2 := t.dialNode(t.Node.Transport.ALPNProtos())
+		alpn := t.Node.Transport.ALPNProtos()
+		t.Logger.Info("tunnel: dialing node",
+			zap.String("node", t.Node.Name),
+			zap.Strings("alpn", alpn))
+
+		tlsConn, err2 := t.dialNode(alpn)
 		if err2 != nil {
 			atomic.AddInt64(&t.stats.TotalErrors, 1)
 			t.Logger.Error("tunnel: dial failed",
@@ -149,6 +158,10 @@ func (t *TunnelManager) HandleConnect(clientConn net.Conn, target, domain string
 				zap.Error(err2))
 			return
 		}
+
+		t.Logger.Info("tunnel: tls connected",
+			zap.String("node", t.Node.Name),
+			zap.String("target", target))
 
 		activeTransport = t.Node.Transport
 		transportName := activeTransport.Name()
@@ -168,12 +181,15 @@ func (t *TunnelManager) HandleConnect(clientConn net.Conn, target, domain string
 				return
 			}
 
-			t.Logger.Debug("tunnel: established (h2 proxy mode)",
+			t.Logger.Info("tunnel: established (h2 proxy mode)",
 				zap.String("node", t.Node.Name),
 				zap.String("target", target))
 
 			n := relay(clientConn, stream)
 			atomic.AddInt64(&t.stats.TotalBytes, n)
+			t.Logger.Info("tunnel: relay finished",
+				zap.String("target", target),
+				zap.Int64("bytes", n))
 			stream.Close()
 			return
 		}
@@ -188,12 +204,17 @@ func (t *TunnelManager) HandleConnect(clientConn net.Conn, target, domain string
 				zap.Error(err))
 			return
 		}
+
+		t.Logger.Info("tunnel: transport wrapped",
+			zap.String("transport", transportName))
 	}
 	defer stream.Close()
 
 	transportName := activeTransport.Name()
 	switch transportName {
 	case "ws":
+		t.Logger.Info("tunnel: sending ws target",
+			zap.String("target", target))
 		if err := t.sendWSTarget(stream, target); err != nil {
 			atomic.AddInt64(&t.stats.TotalErrors, 1)
 			t.Logger.Error("tunnel: send ws target failed", zap.Error(err))
@@ -213,13 +234,17 @@ func (t *TunnelManager) HandleConnect(clientConn net.Conn, target, domain string
 		}
 	}
 
-	t.Logger.Debug("tunnel: established",
+	t.Logger.Info("tunnel: relay started",
 		zap.String("node", t.Node.Name),
 		zap.String("target", target),
 		zap.String("transport", transportName))
 
 	n := relay(clientConn, stream)
 	atomic.AddInt64(&t.stats.TotalBytes, n)
+
+	t.Logger.Info("tunnel: relay finished",
+		zap.String("target", target),
+		zap.Int64("bytes", n))
 }
 
 func (t *TunnelManager) dialNode(alpn []string) (net.Conn, error) {
