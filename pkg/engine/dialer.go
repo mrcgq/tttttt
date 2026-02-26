@@ -180,6 +180,33 @@ func dialOnce(ctx context.Context, cfg *DialConfig) (*DialResult, error) {
 		RootCAs:               tlsCfg.RootCAs,
 	}, cfg.Profile.ClientHelloID)
 
+	// ========================================================================
+	// [CRITICAL FIX] 强制 ALPN 锁定 (全平台通用修复)
+	//
+	// 问题：uTLS 应用 Chrome 指纹时，会强制覆盖 ALPN 为 ["h2", "http/1.1"]
+	// 后果：Cloudflare 选择 H2，但 WebSocket 需要 HTTP/1.1，导致协议冲突
+	// 解决：在握手前，强制将指纹中的 ALPN 扩展替换为我们传输层要求的协议
+	//
+	// 这样做的好处：
+	// 1. TLS 指纹（加密套件、扩展顺序等）依然保持 Chrome 特征
+	// 2. 仅修改 ALPN 列表，模拟"禁用 H2 的 Chrome"（真实存在的场景）
+	// 3. Cloudflare 被迫降级到 HTTP/1.1，WebSocket 握手成功
+	// ========================================================================
+	if err := tlsConn.BuildHandshakeState(); err != nil {
+		rawConn.Close()
+		return nil, fmt.Errorf("engine: build handshake state: %w", err)
+	}
+
+	// 遍历所有 TLS 扩展，找到 ALPN 扩展并强制覆盖
+	for _, ext := range tlsConn.Extensions {
+		if alpnExt, ok := ext.(*utls.ALPNExtension); ok {
+			// cfg.ALPN 来自传输层（如 ws.go 返回 ["http/1.1"]）
+			alpnExt.AlpnProtocols = cfg.ALPN
+			break
+		}
+	}
+	// ========================================================================
+
 	// Handshake with timeout
 	handshakeCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
 	defer cancel()
