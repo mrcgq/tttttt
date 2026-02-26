@@ -58,15 +58,13 @@ func (t *WSTransport) Wrap(conn net.Conn, cfg *Config) (net.Conn, error) {
 	reqStr += "Connection: Upgrade\r\n"
 	reqStr += fmt.Sprintf("Sec-WebSocket-Key: %s\r\n", wsKey)
 	reqStr += "Sec-WebSocket-Version: 13\r\n"
-	reqStr += "Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits\r\n"
+	// NOTE: Do NOT request permessage-deflate — we have not implemented decompression.
+	// If CF accepts it, all incoming frames would be compressed and our readFrame()
+	// would silently produce corrupted data.
 	if cfg.UserAgent != "" {
 		reqStr += fmt.Sprintf("User-Agent: %s\r\n", cfg.UserAgent)
 	}
 	reqStr += fmt.Sprintf("Origin: https://%s\r\n", host)
-	reqStr += "Accept-Language: en-US,en;q=0.9\r\n"
-	reqStr += "Accept-Encoding: gzip, deflate, br\r\n"
-	reqStr += "Pragma: no-cache\r\n"
-	reqStr += "Cache-Control: no-cache\r\n"
 	for k, v := range cfg.Headers {
 		reqStr += fmt.Sprintf("%s: %s\r\n", k, v)
 	}
