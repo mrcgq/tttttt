@@ -15,31 +15,52 @@ builds:
       - -X main.version={{.Version}}
       - -X main.commit={{.ShortCommit}}
       - -X main.date={{.Date}}
-    goos: [linux, darwin, windows, freebsd]
-    goarch: [amd64, arm64, arm, mipsle, mips64le]
-    goarm: ["7"]
-    gomips: [softfloat]
-    ignore:
-      - goos: darwin
-        goarch: arm
-      - goos: darwin
-        goarch: mipsle
-      - goos: darwin
-        goarch: mips64le
-      - goos: windows
-        goarch: arm
-      - goos: windows
-        goarch: mipsle
-      - goos: windows
-        goarch: mips64le
-      - goos: freebsd
-        goarch: arm
-      - goos: freebsd
-        goarch: arm64
-      - goos: freebsd
-        goarch: mipsle
-      - goos: freebsd
-        goarch: mips64le
+    targets: &all_targets
+      # ============ Linux 全架构 ============
+      - linux_amd64_v1
+      - linux_386
+      - linux_arm64
+      - linux_arm_5
+      - linux_arm_6
+      - linux_arm_7
+      - linux_mips_softfloat
+      - linux_mipsle_softfloat
+      - linux_mips64_softfloat
+      - linux_mips64le_softfloat
+      - linux_riscv64
+      - linux_s390x
+      - linux_ppc64
+      - linux_ppc64le
+      - linux_loong64
+      # ============ macOS ============
+      - darwin_amd64_v1
+      - darwin_arm64
+      # ============ Windows ============
+      - windows_amd64_v1
+      - windows_386
+      - windows_arm64
+      - windows_arm_7
+      # ============ FreeBSD ============
+      - freebsd_amd64_v1
+      - freebsd_386
+      - freebsd_arm64
+      - freebsd_arm_7
+      - freebsd_riscv64
+      # ============ OpenBSD ============
+      - openbsd_amd64_v1
+      - openbsd_386
+      - openbsd_arm64
+      - openbsd_arm_7
+      - openbsd_mips64
+      # ============ NetBSD ============
+      - netbsd_amd64_v1
+      - netbsd_386
+      - netbsd_arm64
+      - netbsd_arm_7
+      # ============ DragonFly BSD ============
+      - dragonfly_amd64_v1
+      # ============ Solaris / Illumos ============
+      - solaris_amd64_v1
 
   - id: fpserver
     main: ./tools/fpserver/
@@ -48,39 +69,20 @@ builds:
       - CGO_ENABLED=0
     ldflags:
       - -s -w
-    goos: [linux, darwin, windows, freebsd]
-    goarch: [amd64, arm64, arm, mipsle, mips64le]
-    goarm: ["7"]
-    gomips: [softfloat]
-    ignore:
-      - goos: darwin
-        goarch: arm
-      - goos: darwin
-        goarch: mipsle
-      - goos: darwin
-        goarch: mips64le
-      - goos: windows
-        goarch: arm
-      - goos: windows
-        goarch: mipsle
-      - goos: windows
-        goarch: mips64le
-      - goos: freebsd
-        goarch: arm
-      - goos: freebsd
-        goarch: arm64
-      - goos: freebsd
-        goarch: mipsle
-      - goos: freebsd
-        goarch: mips64le
+    targets: *all_targets          # YAML 锚点复用，与 tls-client 完全相同
 
 archives:
   - id: default
-    format: tar.gz
+    # ✅ v2 语法：formats（列表），替代已弃用的 format（字符串）
+    formats:
+      - tar.gz
     format_overrides:
       - goos: windows
-        format: zip
-    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}"
+        # ✅ v2 语法：formats（列表）
+        formats:
+          - zip
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}{{ with .Arm }}v{{ . }}{{ end }}{{ with .Mips }}_{{ . }}{{ end }}
     files:
       - README.md
       - LICENSE*
@@ -98,10 +100,8 @@ changelog:
       - "^test:"
       - "^ci:"
 
+# ✅ 关键修复：删除硬编码的 owner/name，让 goreleaser 从 git remote 自动检测
 release:
-  github:
-    owner: YOUR_GITHUB_USERNAME
-    name: tls-client
   draft: false
   prerelease: auto
   name_template: "{{.ProjectName}} v{{.Version}}"
