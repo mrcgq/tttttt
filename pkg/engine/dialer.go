@@ -120,6 +120,7 @@ func Dial(ctx context.Context, cfg *DialConfig) (*DialResult, error) {
 	var lastErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		if attempt > 1 {
+			// Exponential backoff with jitter
 			delay := baseDelay * time.Duration(1<<uint(attempt-2))
 			if delay > maxDelay {
 				delay = maxDelay
@@ -145,6 +146,7 @@ func Dial(ctx context.Context, cfg *DialConfig) (*DialResult, error) {
 		lastErr = err
 		atomic.AddInt64(&globalDialMetrics.FailureCount, 1)
 
+		// Don't retry context cancellation
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
@@ -156,20 +158,20 @@ func Dial(ctx context.Context, cfg *DialConfig) (*DialResult, error) {
 func dialOnce(ctx context.Context, cfg *DialConfig) (*DialResult, error) {
 	start := time.Now()
 
-	// 1. TCP Connect
+	// TCP connect
 	dialer := &net.Dialer{Timeout: cfg.Timeout}
 	rawConn, err := dialer.DialContext(ctx, "tcp", cfg.Address)
 	if err != nil {
 		return nil, fmt.Errorf("engine: tcp dial %s: %w", cfg.Address, err)
 	}
 
-	// 2. Build TLS Config
+	// Build TLS config
 	tlsCfg := &tls.Config{
 		NextProtos: cfg.ALPN,
 	}
 	verify.ApplyToTLSConfig(tlsCfg, cfg.VerifyMode, cfg.SNI, cfg.VerifyOpts)
 
-	// 3. Create uTLS Client with fingerprint
+	// utls connection with fingerprint
 	tlsConn := utls.UClient(rawConn, &utls.Config{
 		ServerName:            cfg.SNI,
 		NextProtos:            cfg.ALPN,
@@ -178,31 +180,11 @@ func dialOnce(ctx context.Context, cfg *DialConfig) (*DialResult, error) {
 		RootCAs:               tlsCfg.RootCAs,
 	}, cfg.Profile.ClientHelloID)
 
-	// ========================================================================
-	// [CRITICAL FIX] 强制同步 ALPN (全平台修复)
-	//
-	// 此段代码的作用是防止 uTLS 的浏览器指纹模板强行添加它自带的协议（如 h2）。
-	// 它会强制使 TLS 握手发送的 ALPN 列表与我们 Transport 层要求的完全一致。
-	// ========================================================================
-	if err := tlsConn.BuildHandshakeState(); err != nil {
-		rawConn.Close()
-		return nil, fmt.Errorf("engine: build handshake state: %w", err)
-	}
-
-	for _, ext := range tlsConn.Extensions {
-		if alpnExt, ok := ext.(*utls.ALPNExtension); ok {
-			// 强制覆盖：如果是 WS 模式这里就是 ["http/1.1"]，如果是 H2 模式这里就是 ["h2"]
-			alpnExt.AlpnProtocols = cfg.ALPN
-			break
-		}
-	}
-	// ========================================================================
-
-	// 4. Handshake with timeout
+	// Handshake with timeout
 	handshakeCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
 	defer cancel()
 	if err := tlsConn.HandshakeContext(handshakeCtx); err != nil {
-		_ = rawConn.Close()
+		rawConn.Close()
 		return nil, fmt.Errorf("engine: tls handshake to %s (sni=%s): %w",
 			cfg.Address, cfg.SNI, err)
 	}
@@ -216,3 +198,6 @@ func dialOnce(ctx context.Context, cfg *DialConfig) (*DialResult, error) {
 		Latency:  time.Since(start),
 	}, nil
 }
+
+
+
