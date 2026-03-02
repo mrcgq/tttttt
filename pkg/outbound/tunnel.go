@@ -189,14 +189,8 @@ func (t *TunnelManager) HandleConnect(clientConn net.Conn, target, domain string
 			zap.String("transport", transportName),
 			zap.Strings("alpn", alpn))
 
-		// H2 模式不使用连接池
-		var tlsConn net.Conn
-		var dialErr error
-		if transportName == "h2" {
-			tlsConn, dialErr = t.dialDirect(nodeAddr, nodeSNI, alpn)
-		} else {
-			tlsConn, dialErr = t.dialNodeWithAddr(nodeAddr, nodeSNI, alpn)
-		}
+		// 直接拨号，不使用连接池（H2/WS 模式的连接不可复用）
+		tlsConn, dialErr := t.dialDirect(nodeAddr, nodeSNI, alpn)
 		if dialErr != nil {
 			atomic.AddInt64(&t.stats.TotalErrors, 1)
 			t.markProxyIPFailed(selectedProxyIP)
@@ -212,11 +206,6 @@ func (t *TunnelManager) HandleConnect(clientConn net.Conn, target, domain string
 
 		transportCfg := t.Node.TransportCfg.Clone()
 		transportCfg.Target = target
-
-		// H2 模式传入指纹配置
-		if transportName == "h2" {
-			transportCfg.H2Config = &t.Node.Profile.H2
-		}
 
 		stream, err = activeTransport.Wrap(tlsConn, transportCfg)
 		if err != nil {
@@ -239,6 +228,8 @@ func (t *TunnelManager) HandleConnect(clientConn net.Conn, target, domain string
 
 	transportName := activeTransport.Name()
 
+	// H2 模式：target 已通过 body 第一行发送
+	// WS 模式：需要单独发送 target
 	switch transportName {
 	case "ws":
 		t.Logger.Debug("tunnel: sending ws target",
@@ -249,7 +240,7 @@ func (t *TunnelManager) HandleConnect(clientConn net.Conn, target, domain string
 			return
 		}
 	case "h2":
-		// H2 模式：target 已通过 X-Target header 发送
+		// H2 模式：target 已在 Wrap() 内部作为 body 第一行发送
 		t.Logger.Debug("tunnel: h2 tunnel established",
 			zap.String("target", target))
 	case "raw":
