@@ -1,4 +1,3 @@
-
 package transport
 
 import (
@@ -39,24 +38,20 @@ func (t *SOCKS5OutTransport) Info() TransportInfo {
 	}
 }
 
-// Wrap 通过 SOCKS5 代理连接目标
 func (t *SOCKS5OutTransport) Wrap(conn net.Conn, cfg *Config) (net.Conn, error) {
 	if cfg == nil || cfg.Target == "" {
 		return nil, fmt.Errorf("socks5-out: target is required")
 	}
 
-	// 解析目标地址
 	targetHost, targetPortStr, err := net.SplitHostPort(cfg.Target)
 	if err != nil {
 		return nil, fmt.Errorf("socks5-out: invalid target %q: %w", cfg.Target, err)
 	}
 	targetPort, _ := strconv.Atoi(targetPortStr)
 
-	// 设置超时
 	_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
 	defer func() { _ = conn.SetDeadline(time.Time{}) }()
 
-	// 步骤1: 发送认证方法协商
 	authMethods := []byte{socks5AuthNoneOut}
 	if t.Username != "" && t.Password != "" {
 		authMethods = []byte{socks5AuthNoneOut, socks5AuthPassOut}
@@ -71,7 +66,6 @@ func (t *SOCKS5OutTransport) Wrap(conn net.Conn, cfg *Config) (net.Conn, error) 
 		return nil, fmt.Errorf("socks5-out: write greeting: %w", err)
 	}
 
-	// 步骤2: 读取服务器选择的认证方法
 	authResp := make([]byte, 2)
 	if _, err := io.ReadFull(conn, authResp); err != nil {
 		return nil, fmt.Errorf("socks5-out: read auth response: %w", err)
@@ -80,10 +74,8 @@ func (t *SOCKS5OutTransport) Wrap(conn net.Conn, cfg *Config) (net.Conn, error) 
 		return nil, fmt.Errorf("socks5-out: invalid version %d", authResp[0])
 	}
 
-	// 步骤3: 处理认证
 	switch authResp[1] {
 	case socks5AuthNoneOut:
-		// 无需认证
 	case socks5AuthPassOut:
 		if err := t.doUserPassAuth(conn); err != nil {
 			return nil, err
@@ -94,13 +86,11 @@ func (t *SOCKS5OutTransport) Wrap(conn net.Conn, cfg *Config) (net.Conn, error) 
 		return nil, fmt.Errorf("socks5-out: unsupported auth method %d", authResp[1])
 	}
 
-	// 步骤4: 发送 CONNECT 请求
 	connectReq := t.buildConnectRequest(targetHost, targetPort)
 	if _, err := conn.Write(connectReq); err != nil {
 		return nil, fmt.Errorf("socks5-out: write connect: %w", err)
 	}
 
-	// 步骤5: 读取 CONNECT 响应
 	if err := t.readConnectResponse(conn); err != nil {
 		return nil, err
 	}
@@ -109,9 +99,8 @@ func (t *SOCKS5OutTransport) Wrap(conn net.Conn, cfg *Config) (net.Conn, error) 
 }
 
 func (t *SOCKS5OutTransport) doUserPassAuth(conn net.Conn) error {
-	// RFC 1929: Username/Password Authentication
 	authReq := make([]byte, 3+len(t.Username)+len(t.Password))
-	authReq[0] = 0x01 // 子版本
+	authReq[0] = 0x01
 	authReq[1] = byte(len(t.Username))
 	copy(authReq[2:], t.Username)
 	authReq[2+len(t.Username)] = byte(len(t.Password))
@@ -136,20 +125,17 @@ func (t *SOCKS5OutTransport) doUserPassAuth(conn net.Conn) error {
 func (t *SOCKS5OutTransport) buildConnectRequest(host string, port int) []byte {
 	var req []byte
 
-	// 判断是 IP 还是域名
 	ip := net.ParseIP(host)
 
 	if ip4 := ip.To4(); ip4 != nil {
-		// IPv4
 		req = make([]byte, 10)
 		req[0] = socks5VersionOut
 		req[1] = socks5CmdConnectOut
-		req[2] = 0x00 // RSV
+		req[2] = 0x00
 		req[3] = socks5AtypIPv4Out
 		copy(req[4:8], ip4)
 		binary.BigEndian.PutUint16(req[8:], uint16(port))
 	} else if ip != nil {
-		// IPv6
 		req = make([]byte, 22)
 		req[0] = socks5VersionOut
 		req[1] = socks5CmdConnectOut
@@ -158,7 +144,6 @@ func (t *SOCKS5OutTransport) buildConnectRequest(host string, port int) []byte {
 		copy(req[4:20], ip.To16())
 		binary.BigEndian.PutUint16(req[20:], uint16(port))
 	} else {
-		// 域名
 		hostBytes := []byte(host)
 		req = make([]byte, 7+len(hostBytes))
 		req[0] = socks5VersionOut
@@ -174,7 +159,6 @@ func (t *SOCKS5OutTransport) buildConnectRequest(host string, port int) []byte {
 }
 
 func (t *SOCKS5OutTransport) readConnectResponse(conn net.Conn) error {
-	// 读取响应头
 	header := make([]byte, 4)
 	if _, err := io.ReadFull(conn, header); err != nil {
 		return fmt.Errorf("socks5-out: read response: %w", err)
@@ -184,7 +168,6 @@ func (t *SOCKS5OutTransport) readConnectResponse(conn net.Conn) error {
 		return fmt.Errorf("socks5-out: invalid response version")
 	}
 
-	// 检查状态
 	if header[1] != 0x00 {
 		errMsgs := map[byte]string{
 			0x01: "general failure",
@@ -203,7 +186,6 @@ func (t *SOCKS5OutTransport) readConnectResponse(conn net.Conn) error {
 		return fmt.Errorf("socks5-out: connect failed: %s", msg)
 	}
 
-	// 读取绑定地址（忽略内容，但必须读取）
 	atyp := header[3]
 	var addrLen int
 	switch atyp {
@@ -221,8 +203,7 @@ func (t *SOCKS5OutTransport) readConnectResponse(conn net.Conn) error {
 		return fmt.Errorf("socks5-out: unknown atyp %d", atyp)
 	}
 
-	// 读取地址和端口
-	remaining := make([]byte, addrLen+2) // +2 for port
+	remaining := make([]byte, addrLen+2)
 	if _, err := io.ReadFull(conn, remaining); err != nil {
 		return err
 	}
@@ -232,7 +213,6 @@ func (t *SOCKS5OutTransport) readConnectResponse(conn net.Conn) error {
 
 // DialSOCKS5 直接通过 SOCKS5 代理拨号
 func DialSOCKS5(proxyAddr, target, username, password string, timeout time.Duration) (net.Conn, error) {
-	// 连接到 SOCKS5 代理
 	conn, err := net.DialTimeout("tcp", proxyAddr, timeout)
 	if err != nil {
 		return nil, fmt.Errorf("socks5: dial proxy: %w", err)
@@ -254,7 +234,3 @@ func DialSOCKS5(proxyAddr, target, username, password string, timeout time.Durat
 
 	return wrappedConn, nil
 }
-
-
-
-
