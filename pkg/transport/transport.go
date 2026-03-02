@@ -36,9 +36,7 @@ type Config struct {
 	MaxIdleTime int
 	Target      string
 
-	// H2Config 传递 HTTP/2 指纹配置（类型为 *h2.FingerprintConfig）。
-	// 使用 interface{} 避免 transport 包对 internal/h2 的硬依赖。
-	// 仅 H2Transport 使用此字段。
+	// H2Config 传递 HTTP/2 指纹配置（类型为 *h2.FingerprintConfig）
 	H2Config interface{}
 }
 
@@ -62,7 +60,6 @@ func (c *Config) Clone() *Config {
 			clone.Headers[k] = v
 		}
 	}
-	// H2Config 是只读引用，浅拷贝即可
 	return &clone
 }
 
