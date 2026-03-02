@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"bytes"  // 添加这个导入
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -20,7 +21,7 @@ var (
 type H2Transport struct{}
 
 func (t *H2Transport) Name() string         { return "h2" }
-func (t *H2Transport) ALPNProtos() []string { return[]string{"h2"} }
+func (t *H2Transport) ALPNProtos() []string { return []string{"h2"} }
 
 func (t *H2Transport) Info() TransportInfo {
 	return TransportInfo{
@@ -105,7 +106,7 @@ func (c *h2StreamConn) doH2Request(cfg *Config, host, path, ua string) {
 		}
 	}()
 
-	// 👑 终极二进制协议构造
+	// 终极二进制协议构造
 	var bodyReader io.Reader
 	if cfg.Target != "" {
 		targetBytes := []byte(cfg.Target)
@@ -130,12 +131,12 @@ func (c *h2StreamConn) doH2Request(cfg *Config, host, path, ua string) {
 	}
 
 	req.Header.Set("User-Agent", ua)
-	req.Header.Set("Content-Type", "application/octet-stream") // 改回二进制流
+	req.Header.Set("Content-Type", "application/octet-stream")
 	for k, v := range cfg.Headers {
 		req.Header.Set(k, v)
 	}
 
-	resp, err := client.Do(req)
+	resp, err := c.client.Do(req)  // 修复：client -> c.client
 	if err != nil {
 		c.initErr = fmt.Errorf("h2 stream failed: %w", err)
 		return
