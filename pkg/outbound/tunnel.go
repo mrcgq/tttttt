@@ -192,18 +192,31 @@ func (t *TunnelManager) HandleConnect(clientConn net.Conn, target, domain string
 		activeTransport = usedTransport
 	} else {
 		alpn := t.Node.Transport.ALPNProtos()
+		activeTransport = t.Node.Transport
+		transportName := activeTransport.Name()
+
 		t.Logger.Debug("tunnel: dialing node",
 			zap.String("node", t.Node.Name),
 			zap.String("address", nodeAddr),
+			zap.String("transport", transportName),
 			zap.Strings("alpn", alpn))
 
-		tlsConn, err2 := t.dialNodeWithAddr(nodeAddr, nodeSNI, alpn)
-		if err2 != nil {
+		// ============================================================
+		// [关键修复] H2 模式不使用连接池，因为 H2 Client 会独占 TLS 连接
+		// ============================================================
+		var tlsConn net.Conn
+		var dialErr error
+		if transportName == "h2" {
+			tlsConn, dialErr = t.dialDirect(nodeAddr, nodeSNI, alpn)
+		} else {
+			tlsConn, dialErr = t.dialNodeWithAddr(nodeAddr, nodeSNI, alpn)
+		}
+		if dialErr != nil {
 			atomic.AddInt64(&t.stats.TotalErrors, 1)
 			t.markProxyIPFailed(selectedProxyIP)
 			t.Logger.Error("tunnel: dial failed",
 				zap.String("node", t.Node.Name),
-				zap.Error(err2))
+				zap.Error(dialErr))
 			return
 		}
 
@@ -211,12 +224,16 @@ func (t *TunnelManager) HandleConnect(clientConn net.Conn, target, domain string
 			zap.String("node", t.Node.Name),
 			zap.String("target", target))
 
-		activeTransport = t.Node.Transport
-		transportName := activeTransport.Name()
-
 		// 准备 transport 配置
 		transportCfg := t.Node.TransportCfg.Clone()
 		transportCfg.Target = target
+
+		// ============================================================
+		// [关键修复] 为 H2 模式传入 HTTP/2 指纹配置
+		// ============================================================
+		if transportName == "h2" {
+			transportCfg.H2Config = &t.Node.Profile.H2
+		}
 
 		stream, err = activeTransport.Wrap(tlsConn, transportCfg)
 		if err != nil {
@@ -251,8 +268,8 @@ func (t *TunnelManager) HandleConnect(clientConn net.Conn, target, domain string
 			return
 		}
 	case "h2":
-		// H2 模式：目标已在 Wrap 时通过 TransportCfg.Target 传递
-		t.Logger.Debug("tunnel: h2 target sent via transport config",
+		// H2 模式：目标地址已在 Wrap() 内部通过 DATA 帧发送给 Worker
+		t.Logger.Debug("tunnel: h2 tunnel established",
 			zap.String("target", target))
 	case "raw":
 		// RAW 模式：发送 HTTP CONNECT
@@ -268,14 +285,11 @@ func (t *TunnelManager) HandleConnect(clientConn net.Conn, target, domain string
 		zap.String("target", target),
 		zap.String("transport", transportName))
 
-	n, relayErr := t.relay(clientConn, stream)
+	// ============================================================
+	// [修复] 使用带错误日志的 relay 方法
+	// ============================================================
+	n := t.relay(clientConn, stream)
 	atomic.AddInt64(&t.stats.TotalBytes, n)
-
-	if relayErr != nil {
-		t.Logger.Warn("tunnel: relay error",
-			zap.String("target", target),
-			zap.Error(relayErr))
-	}
 
 	t.Logger.Info("tunnel: relay finished",
 		zap.String("target", target),
@@ -292,6 +306,25 @@ func (t *TunnelManager) markProxyIPSuccess(entry *ProxyIPEntry) {
 	if entry != nil && t.ProxyIPMgr != nil {
 		t.ProxyIPMgr.MarkSuccess(entry.Address)
 	}
+}
+
+// dialDirect 直接拨号，不使用连接池（H2 模式专用）。
+func (t *TunnelManager) dialDirect(address, sni string, alpn []string) (net.Conn, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	result, err := engine.Dial(ctx, &engine.DialConfig{
+		Address:    address,
+		SNI:        sni,
+		Profile:    t.Node.Profile,
+		VerifyMode: t.Node.VerifyMode,
+		ALPN:       alpn,
+		Retry:      t.Node.Retry,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result.Conn, nil
 }
 
 func (t *TunnelManager) dialNodeWithAddr(address, sni string, alpn []string) (net.Conn, error) {
@@ -332,58 +365,45 @@ func (t *TunnelManager) sendHTTPConnect(stream net.Conn, target string) error {
 	return nil
 }
 
-// relay 进行双向数据转发，返回传输字节数和可能的错误
-func (t *TunnelManager) relay(client net.Conn, proxy net.Conn) (int64, error) {
+// relay 在 client 和 proxy 之间双向转发数据。
+// [修复] 不再吞掉 io.Copy 的错误，而是通过 Logger 记录。
+func (t *TunnelManager) relay(client net.Conn, proxy net.Conn) int64 {
 	var wg sync.WaitGroup
 	var totalBytes int64
-	var firstErr error
-	var errMu sync.Mutex
-
-	setErr := func(err error) {
-		errMu.Lock()
-		if firstErr == nil && err != nil && err != io.EOF {
-			firstErr = err
-		}
-		errMu.Unlock()
-	}
-
 	wg.Add(2)
 
-	// client -> proxy (上传)
+	// client → proxy（上行）
 	go func() {
 		defer wg.Done()
 		n, err := io.Copy(proxy, client)
-		atomic.AddInt64(&totalBytes, n)
 		if err != nil {
-			setErr(fmt.Errorf("uplink: %w", err))
-			t.Logger.Debug("relay: uplink error", zap.Error(err), zap.Int64("bytes", n))
+			t.Logger.Debug("relay: client→proxy error",
+				zap.Int64("bytes", n),
+				zap.Error(err))
 		}
+		atomic.AddInt64(&totalBytes, n)
 		if tc, ok := proxy.(interface{ CloseWrite() error }); ok {
 			_ = tc.CloseWrite()
 		}
 	}()
 
-	// proxy -> client (下载)
+	// proxy → client（下行）
 	go func() {
 		defer wg.Done()
 		n, err := io.Copy(client, proxy)
-		atomic.AddInt64(&totalBytes, n)
 		if err != nil {
-			setErr(fmt.Errorf("downlink: %w", err))
-			t.Logger.Debug("relay: downlink error", zap.Error(err), zap.Int64("bytes", n))
+			t.Logger.Debug("relay: proxy→client error",
+				zap.Int64("bytes", n),
+				zap.Error(err))
 		}
+		atomic.AddInt64(&totalBytes, n)
 		if tc, ok := client.(interface{ CloseWrite() error }); ok {
 			_ = tc.CloseWrite()
 		}
 	}()
 
 	wg.Wait()
-
-	errMu.Lock()
-	err := firstErr
-	errMu.Unlock()
-
-	return atomic.LoadInt64(&totalBytes), err
+	return atomic.LoadInt64(&totalBytes)
 }
 
 func (t *TunnelManager) Close() {
