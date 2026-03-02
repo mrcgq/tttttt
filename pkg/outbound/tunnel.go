@@ -1,4 +1,3 @@
-
 package outbound
 
 import (
@@ -55,7 +54,7 @@ func NewNodeConfig(
 		if nodeCfg.TransportOpts.H2Path != "" {
 			tcfg.Path = nodeCfg.TransportOpts.H2Path
 		} else if tcfg.Path == "" {
-			tcfg.Path = "/tunnel" // 默认 H2 路径
+			tcfg.Path = "/tunnel"
 		}
 	}
 
@@ -95,26 +94,26 @@ type TunnelStats struct {
 	TotalErrors int64
 }
 
-// TunnelManager handles outbound proxy tunnels.
-type TunnelManager struct {
-	Node       *NodeConfig
-	Logger     *zap.Logger
-	Pool       *engine.ConnPool
-	ProxyIPMgr *ProxyIPManager // 新增：ProxyIP 管理器
-	stats      TunnelStats
+// ProxyIPEntry 代表一个 ProxyIP
+type ProxyIPEntry struct {
+	Address string
+	SNI     string
 }
 
-// ProxyIPManager 简化的 ProxyIP 管理器接口
-type ProxyIPManager interface {
+// ProxyIPSelector ProxyIP 选择器接口
+type ProxyIPSelector interface {
 	Select() *ProxyIPEntry
 	MarkFailed(address string)
 	MarkSuccess(address string)
 }
 
-// ProxyIPEntry 代表一个 ProxyIP
-type ProxyIPEntry struct {
-	Address string
-	SNI     string
+// TunnelManager handles outbound proxy tunnels.
+type TunnelManager struct {
+	Node       *NodeConfig
+	Logger     *zap.Logger
+	Pool       *engine.ConnPool
+	ProxyIPMgr ProxyIPSelector // 修复：使用接口类型，不是指针
+	stats      TunnelStats
 }
 
 func NewTunnelManager(node *NodeConfig, logger *zap.Logger) *TunnelManager {
@@ -126,7 +125,7 @@ func NewTunnelManager(node *NodeConfig, logger *zap.Logger) *TunnelManager {
 }
 
 // SetProxyIPManager 设置 ProxyIP 管理器
-func (t *TunnelManager) SetProxyIPManager(mgr ProxyIPManager) {
+func (t *TunnelManager) SetProxyIPManager(mgr ProxyIPSelector) {
 	t.ProxyIPMgr = mgr
 }
 
@@ -253,7 +252,6 @@ func (t *TunnelManager) HandleConnect(clientConn net.Conn, target, domain string
 		}
 	case "h2":
 		// H2 模式：目标已在 Wrap 时通过 TransportCfg.Target 传递
-		// 新的 h2.go 实现会在初始化时发送目标
 		t.Logger.Debug("tunnel: h2 target sent via transport config",
 			zap.String("target", target))
 	case "raw":
@@ -366,4 +364,3 @@ func (t *TunnelManager) Close() {
 		t.Pool.Close()
 	}
 }
-
