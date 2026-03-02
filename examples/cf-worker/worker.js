@@ -1,14 +1,9 @@
-
-// examples/cf-worker/worker.js
-// TLS-Client Cloudflare Worker - 支持 WebSocket 和 HTTP POST 隧道
-
 import { connect } from 'cloudflare:sockets';
 
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
-    // Health check
     if (url.pathname === "/health") {
       return new Response(JSON.stringify({
         status: "ok",
@@ -20,21 +15,18 @@ export default {
       });
     }
 
-    // WebSocket Upgrade
     const upgradeHeader = request.headers.get("Upgrade");
     if (upgradeHeader === "websocket") {
       return await handleWebSocket(request);
     }
 
-    // HTTP POST Tunnel (支持 H2 模式)
     if (request.method === "POST") {
       const pathname = url.pathname;
       if (pathname === "/" || pathname === "/tunnel" || pathname.startsWith("/tunnel")) {
-        return await handlePostTunnel(request);
+        return await handlePostTunnel(request, ctx);
       }
     }
 
-    // 默认响应
     return new Response("TLS-Client Worker Ready", {
       status: 200,
       headers: { "Content-Type": "text/plain" }
@@ -42,10 +34,7 @@ export default {
   },
 };
 
-// ==================================================================
-// HTTP POST 隧道处理
-// ==================================================================
-async function handlePostTunnel(request) {
+async function handlePostTunnel(request, ctx) {
   let reader;
   try {
     reader = request.body.getReader();
@@ -53,7 +42,6 @@ async function handlePostTunnel(request) {
     return new Response("Invalid request body", { status: 400 });
   }
 
-  // 步骤1: 读取目标地址（第一行，以换行符结束）
   let buffer = new Uint8Array(0);
   let targetStr = null;
   let remainingData = null;
@@ -64,13 +52,11 @@ async function handlePostTunnel(request) {
       return new Response("No target address received", { status: 400 });
     }
 
-    // 拼接数据
     const newBuffer = new Uint8Array(buffer.length + value.length);
     newBuffer.set(buffer);
     newBuffer.set(value, buffer.length);
     buffer = newBuffer;
 
-    // 查找换行符
     const newlineIdx = findNewline(buffer);
     if (newlineIdx !== -1) {
       targetStr = new TextDecoder().decode(buffer.slice(0, newlineIdx)).trim();
@@ -78,7 +64,6 @@ async function handlePostTunnel(request) {
       break;
     }
 
-    // 防止缓冲区过大
     if (buffer.length > 2048) {
       return new Response("Target line too long", { status: 400 });
     }
@@ -88,11 +73,9 @@ async function handlePostTunnel(request) {
     return new Response("Empty target address", { status: 400 });
   }
 
-  // 步骤2: 解析目标地址
   const [host, port] = parseTarget(targetStr);
   console.log(`POST Tunnel: connecting to ${host}:${port}`);
 
-  // 步骤3: 连接目标服务器
   let targetSocket;
   try {
     targetSocket = connect({ hostname: host, port: parseInt(port) });
@@ -102,23 +85,17 @@ async function handlePostTunnel(request) {
     return new Response(`Connection failed: ${e.message}`, { status: 502 });
   }
 
-  // 步骤4: 创建响应流
   const { readable, writable } = new TransformStream();
   const responseWriter = writable.getWriter();
 
-  // 步骤5: 启动双向数据转发
-
-  // 上行: Client -> Target
   ctx.waitUntil((async () => {
     try {
       const targetWriter = targetSocket.writable.getWriter();
 
-      // 先发送剩余数据
       if (remainingData && remainingData.length > 0) {
         await targetWriter.write(remainingData);
       }
 
-      // 继续转发请求体
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -131,7 +108,6 @@ async function handlePostTunnel(request) {
     }
   })());
 
-  // 下行: Target -> Client
   ctx.waitUntil((async () => {
     try {
       const targetReader = targetSocket.readable.getReader();
@@ -145,9 +121,7 @@ async function handlePostTunnel(request) {
       console.error("Downlink error:", e);
       try {
         await responseWriter.close();
-      } catch (closeErr) {
-        // 忽略关闭错误
-      }
+      } catch (closeErr) {}
     }
   })());
 
@@ -161,9 +135,6 @@ async function handlePostTunnel(request) {
   });
 }
 
-// ==================================================================
-// WebSocket 隧道处理
-// ==================================================================
 async function handleWebSocket(request) {
   const [client, server] = Object.values(new WebSocketPair());
   server.accept();
@@ -177,7 +148,6 @@ async function handleWebSocket(request) {
       if (firstMessage) {
         firstMessage = false;
 
-        // 第一条消息是目标地址
         const target = typeof event.data === "string"
           ? event.data
           : new TextDecoder().decode(new Uint8Array(event.data));
@@ -190,7 +160,6 @@ async function handleWebSocket(request) {
           await targetSocket.opened;
           targetWriter = targetSocket.writable.getWriter();
 
-          // 启动下行转发
           const targetReader = targetSocket.readable.getReader();
           (async () => {
             try {
@@ -218,7 +187,6 @@ async function handleWebSocket(request) {
         return;
       }
 
-      // 后续消息转发到目标
       if (targetWriter) {
         const data = event.data instanceof ArrayBuffer
           ? new Uint8Array(event.data)
@@ -236,9 +204,7 @@ async function handleWebSocket(request) {
     if (targetSocket) {
       try {
         targetSocket.close();
-      } catch (e) {
-        // 忽略关闭错误
-      }
+      } catch (e) {}
     }
   });
 
@@ -247,22 +213,16 @@ async function handleWebSocket(request) {
     if (targetSocket) {
       try {
         targetSocket.close();
-      } catch (err) {
-        // 忽略
-      }
+      } catch (err) {}
     }
   });
 
   return new Response(null, { status: 101, webSocket: client });
 }
 
-// ==================================================================
-// 工具函数
-// ==================================================================
-
 function findNewline(arr) {
   for (let i = 0; i < arr.length; i++) {
-    if (arr[i] === 10) { // \n
+    if (arr[i] === 10) {
       return i;
     }
   }
@@ -272,7 +232,6 @@ function findNewline(arr) {
 function parseTarget(target) {
   target = target.trim();
 
-  // IPv6 with port: [::1]:443
   if (target.startsWith("[")) {
     const bracketEnd = target.indexOf("]");
     if (bracketEnd !== -1) {
@@ -283,16 +242,13 @@ function parseTarget(target) {
     }
   }
 
-  // hostname:port or IPv4:port
   const lastColon = target.lastIndexOf(":");
   if (lastColon === -1) {
     return [target, "443"];
   }
 
-  // 检查是否是 IPv6 无端口
   const beforeColon = target.slice(0, lastColon);
   if (beforeColon.includes(":")) {
-    // 可能是 IPv6 地址
     return [target, "443"];
   }
 
