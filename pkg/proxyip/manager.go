@@ -1,4 +1,3 @@
-
 package proxyip
 
 import (
@@ -13,6 +12,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/user/tls-client/pkg/config"
+	"github.com/user/tls-client/pkg/outbound"
 )
 
 // Entry 代表一个可用的 ProxyIP
@@ -29,7 +29,7 @@ type Entry struct {
 	Available   bool
 }
 
-// Manager 管理 ProxyIP 池
+// Manager 管理 ProxyIP 池，实现 outbound.ProxyIPSelector 接口
 type Manager struct {
 	mu          sync.RWMutex
 	entries     []*Entry
@@ -42,11 +42,13 @@ type Manager struct {
 	stopCh      chan struct{}
 	wg          sync.WaitGroup
 
-	// 统计
 	totalChecks  int64
 	totalSuccess int64
 	totalFail    int64
 }
+
+// 确保 Manager 实现了 ProxyIPSelector 接口
+var _ outbound.ProxyIPSelector = (*Manager)(nil)
 
 // SelectMode 选择模式
 type SelectMode string
@@ -97,7 +99,6 @@ func NewManager(cfg Config) *Manager {
 		stopCh:      make(chan struct{}),
 	}
 
-	// 标记所有 IP 为初始可用
 	for _, e := range m.entries {
 		e.Available = true
 	}
@@ -167,7 +168,6 @@ func (m *Manager) Stop() {
 func (m *Manager) checkLoop() {
 	defer m.wg.Done()
 
-	// 立即执行一次检测
 	m.CheckAll()
 
 	ticker := time.NewTicker(m.checkPeriod)
@@ -242,7 +242,6 @@ func (m *Manager) checkOne(entry *Entry) {
 	entry.FailCount = 0
 	entry.Available = true
 
-	// 更新成功率
 	total := float64(atomic.LoadInt64(&m.totalChecks))
 	success := float64(atomic.LoadInt64(&m.totalSuccess))
 	if total > 0 {
@@ -255,33 +254,46 @@ func (m *Manager) checkOne(entry *Entry) {
 	)
 }
 
-// Select 选择一个可用的 ProxyIP
-func (m *Manager) Select() *Entry {
+// Select 选择一个可用的 ProxyIP（实现 ProxyIPSelector 接口）
+func (m *Manager) Select() *outbound.ProxyIPEntry {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	available := m.availableEntries()
 	if len(available) == 0 {
-		// 没有可用的，随机返回一个（可能已失败）
 		if len(m.entries) > 0 {
-			return m.entries[rand.Intn(len(m.entries))]
+			e := m.entries[rand.Intn(len(m.entries))]
+			return &outbound.ProxyIPEntry{
+				Address: e.Address,
+				SNI:     e.SNI,
+			}
 		}
 		return nil
 	}
 
+	var selected *Entry
 	switch m.mode {
 	case ModeRoundRobin:
-		return m.selectRoundRobin(available)
+		selected = m.selectRoundRobin(available)
 	case ModeRandom:
-		return available[rand.Intn(len(available))]
+		selected = available[rand.Intn(len(available))]
 	case ModeLatency:
-		return m.selectLowestLatency(available)
+		selected = m.selectLowestLatency(available)
 	case ModeWeighted:
-		return m.selectWeighted(available)
+		selected = m.selectWeighted(available)
 	case ModeFailover:
-		return available[0]
+		selected = available[0]
 	default:
-		return available[0]
+		selected = available[0]
+	}
+
+	if selected == nil {
+		return nil
+	}
+
+	return &outbound.ProxyIPEntry{
+		Address: selected.Address,
+		SNI:     selected.SNI,
 	}
 }
 
@@ -326,7 +338,7 @@ func (m *Manager) availableEntries() []*Entry {
 	return result
 }
 
-// MarkFailed 标记 IP 失败
+// MarkFailed 标记 IP 失败（实现 ProxyIPSelector 接口）
 func (m *Manager) MarkFailed(address string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -346,7 +358,7 @@ func (m *Manager) MarkFailed(address string) {
 	}
 }
 
-// MarkSuccess 标记 IP 成功
+// MarkSuccess 标记 IP 成功（实现 ProxyIPSelector 接口）
 func (m *Manager) MarkSuccess(address string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -414,8 +426,3 @@ func (m *Manager) Stats() map[string]interface{} {
 		"check_period": m.checkPeriod.String(),
 	}
 }
-
-
-
-
-
