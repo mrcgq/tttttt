@@ -288,9 +288,6 @@ func (t *TunnelManager) markProxyIPSuccess(entry *ProxyIPEntry) {
 	}
 }
 
-func (t *TunnelManager) dialNode(alpn []string) (net.Conn, error) {
-	return t.dialNodeWithAddr(t.Node.Address, t.Node.SNI, alpn)
-}
 
 func (t *TunnelManager) dialNodeWithAddr(address, sni string, alpn []string) (net.Conn, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
