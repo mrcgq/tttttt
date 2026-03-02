@@ -112,7 +112,7 @@ type TunnelManager struct {
 	Node       *NodeConfig
 	Logger     *zap.Logger
 	Pool       *engine.ConnPool
-	ProxyIPMgr ProxyIPSelector // 修复：使用接口类型，不是指针
+	ProxyIPMgr ProxyIPSelector
 	stats      TunnelStats
 }
 
@@ -268,8 +268,14 @@ func (t *TunnelManager) HandleConnect(clientConn net.Conn, target, domain string
 		zap.String("target", target),
 		zap.String("transport", transportName))
 
-	n := relay(clientConn, stream)
+	n, relayErr := t.relay(clientConn, stream)
 	atomic.AddInt64(&t.stats.TotalBytes, n)
+
+	if relayErr != nil {
+		t.Logger.Warn("tunnel: relay error",
+			zap.String("target", target),
+			zap.Error(relayErr))
+	}
 
 	t.Logger.Info("tunnel: relay finished",
 		zap.String("target", target),
@@ -287,7 +293,6 @@ func (t *TunnelManager) markProxyIPSuccess(entry *ProxyIPEntry) {
 		t.ProxyIPMgr.MarkSuccess(entry.Address)
 	}
 }
-
 
 func (t *TunnelManager) dialNodeWithAddr(address, sni string, alpn []string) (net.Conn, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -327,33 +332,58 @@ func (t *TunnelManager) sendHTTPConnect(stream net.Conn, target string) error {
 	return nil
 }
 
-func relay(client net.Conn, proxy net.Conn) int64 {
+// relay 进行双向数据转发，返回传输字节数和可能的错误
+func (t *TunnelManager) relay(client net.Conn, proxy net.Conn) (int64, error) {
 	var wg sync.WaitGroup
 	var totalBytes int64
+	var firstErr error
+	var errMu sync.Mutex
+
+	setErr := func(err error) {
+		errMu.Lock()
+		if firstErr == nil && err != nil && err != io.EOF {
+			firstErr = err
+		}
+		errMu.Unlock()
+	}
+
 	wg.Add(2)
 
-	// client -> proxy
+	// client -> proxy (上传)
 	go func() {
 		defer wg.Done()
-		n, _ := io.Copy(proxy, client)
+		n, err := io.Copy(proxy, client)
 		atomic.AddInt64(&totalBytes, n)
+		if err != nil {
+			setErr(fmt.Errorf("uplink: %w", err))
+			t.Logger.Debug("relay: uplink error", zap.Error(err), zap.Int64("bytes", n))
+		}
 		if tc, ok := proxy.(interface{ CloseWrite() error }); ok {
 			_ = tc.CloseWrite()
 		}
 	}()
 
-	// proxy -> client
+	// proxy -> client (下载)
 	go func() {
 		defer wg.Done()
-		n, _ := io.Copy(client, proxy)
+		n, err := io.Copy(client, proxy)
 		atomic.AddInt64(&totalBytes, n)
+		if err != nil {
+			setErr(fmt.Errorf("downlink: %w", err))
+			t.Logger.Debug("relay: downlink error", zap.Error(err), zap.Int64("bytes", n))
+		}
 		if tc, ok := client.(interface{ CloseWrite() error }); ok {
 			_ = tc.CloseWrite()
 		}
 	}()
 
 	wg.Wait()
-	return atomic.LoadInt64(&totalBytes)
+
+	errMu.Lock()
+	err := firstErr
+	errMu.Unlock()
+
+	return atomic.LoadInt64(&totalBytes), err
 }
 
 func (t *TunnelManager) Close() {
