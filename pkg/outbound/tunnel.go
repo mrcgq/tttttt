@@ -20,7 +20,6 @@ import (
 	"github.com/user/tls-client/pkg/verify"
 )
 
-// NodeConfig describes a proxy node with transport settings.
 type NodeConfig struct {
 	Name         string
 	Address      string
@@ -33,7 +32,6 @@ type NodeConfig struct {
 	Retry        *engine.RetryConfig
 }
 
-// NewNodeConfig builds a NodeConfig from parsed configuration.
 func NewNodeConfig(
 	nodeCfg *config.NodeConfig,
 	profile *fingerprint.BrowserProfile,
@@ -49,7 +47,6 @@ func NewNodeConfig(
 		Headers:   nodeCfg.TransportOpts.WSHeaders,
 	}
 
-	// H2 路径处理
 	if t.Name() == "h2" {
 		if nodeCfg.TransportOpts.H2Path != "" {
 			tcfg.Path = nodeCfg.TransportOpts.H2Path
@@ -86,7 +83,6 @@ func NewNodeConfig(
 	return nc
 }
 
-// TunnelStats holds tunnel operation metrics.
 type TunnelStats struct {
 	ActiveConns int64
 	TotalConns  int64
@@ -94,20 +90,17 @@ type TunnelStats struct {
 	TotalErrors int64
 }
 
-// ProxyIPEntry 代表一个 ProxyIP
 type ProxyIPEntry struct {
 	Address string
 	SNI     string
 }
 
-// ProxyIPSelector ProxyIP 选择器接口
 type ProxyIPSelector interface {
 	Select() *ProxyIPEntry
 	MarkFailed(address string)
 	MarkSuccess(address string)
 }
 
-// TunnelManager handles outbound proxy tunnels.
 type TunnelManager struct {
 	Node       *NodeConfig
 	Logger     *zap.Logger
@@ -124,12 +117,10 @@ func NewTunnelManager(node *NodeConfig, logger *zap.Logger) *TunnelManager {
 	}
 }
 
-// SetProxyIPManager 设置 ProxyIP 管理器
 func (t *TunnelManager) SetProxyIPManager(mgr ProxyIPSelector) {
 	t.ProxyIPMgr = mgr
 }
 
-// Stats returns tunnel operation statistics.
 func (t *TunnelManager) Stats() TunnelStats {
 	return TunnelStats{
 		ActiveConns: atomic.LoadInt64(&t.stats.ActiveConns),
@@ -139,7 +130,6 @@ func (t *TunnelManager) Stats() TunnelStats {
 	}
 }
 
-// HandleConnect establishes a tunnel to the target through the proxy node.
 func (t *TunnelManager) HandleConnect(clientConn net.Conn, target, domain string) {
 	atomic.AddInt64(&t.stats.TotalConns, 1)
 	atomic.AddInt64(&t.stats.ActiveConns, 1)
@@ -149,11 +139,9 @@ func (t *TunnelManager) HandleConnect(clientConn net.Conn, target, domain string
 		zap.String("target", target),
 		zap.String("domain", domain))
 
-	// 确定使用的节点地址和SNI
 	nodeAddr := t.Node.Address
 	nodeSNI := t.Node.SNI
 
-	// 如果启用了 ProxyIP，使用 ProxyIP 管理器选择
 	var selectedProxyIP *ProxyIPEntry
 	if t.ProxyIPMgr != nil {
 		selectedProxyIP = t.ProxyIPMgr.Select()
@@ -201,9 +189,7 @@ func (t *TunnelManager) HandleConnect(clientConn net.Conn, target, domain string
 			zap.String("transport", transportName),
 			zap.Strings("alpn", alpn))
 
-		// ============================================================
-		// [关键修复] H2 模式不使用连接池，因为 H2 Client 会独占 TLS 连接
-		// ============================================================
+		// H2 模式不使用连接池
 		var tlsConn net.Conn
 		var dialErr error
 		if transportName == "h2" {
@@ -224,13 +210,10 @@ func (t *TunnelManager) HandleConnect(clientConn net.Conn, target, domain string
 			zap.String("node", t.Node.Name),
 			zap.String("target", target))
 
-		// 准备 transport 配置
 		transportCfg := t.Node.TransportCfg.Clone()
 		transportCfg.Target = target
 
-		// ============================================================
-		// [关键修复] 为 H2 模式传入 HTTP/2 指纹配置
-		// ============================================================
+		// H2 模式传入指纹配置
 		if transportName == "h2" {
 			transportCfg.H2Config = &t.Node.Profile.H2
 		}
@@ -252,12 +235,10 @@ func (t *TunnelManager) HandleConnect(clientConn net.Conn, target, domain string
 	}
 	defer stream.Close()
 
-	// 标记 ProxyIP 成功
 	t.markProxyIPSuccess(selectedProxyIP)
 
 	transportName := activeTransport.Name()
 
-	// 根据传输类型发送目标信息
 	switch transportName {
 	case "ws":
 		t.Logger.Debug("tunnel: sending ws target",
@@ -268,11 +249,10 @@ func (t *TunnelManager) HandleConnect(clientConn net.Conn, target, domain string
 			return
 		}
 	case "h2":
-		// H2 模式：目标地址已在 Wrap() 内部通过 DATA 帧发送给 Worker
+		// H2 模式：target 已通过 X-Target header 发送
 		t.Logger.Debug("tunnel: h2 tunnel established",
 			zap.String("target", target))
 	case "raw":
-		// RAW 模式：发送 HTTP CONNECT
 		if err := t.sendHTTPConnect(stream, target); err != nil {
 			atomic.AddInt64(&t.stats.TotalErrors, 1)
 			t.Logger.Error("tunnel: send CONNECT failed", zap.Error(err))
@@ -285,9 +265,6 @@ func (t *TunnelManager) HandleConnect(clientConn net.Conn, target, domain string
 		zap.String("target", target),
 		zap.String("transport", transportName))
 
-	// ============================================================
-	// [修复] 使用带错误日志的 relay 方法
-	// ============================================================
 	n := t.relay(clientConn, stream)
 	atomic.AddInt64(&t.stats.TotalBytes, n)
 
@@ -308,7 +285,6 @@ func (t *TunnelManager) markProxyIPSuccess(entry *ProxyIPEntry) {
 	}
 }
 
-// dialDirect 直接拨号，不使用连接池（H2 模式专用）。
 func (t *TunnelManager) dialDirect(address, sni string, alpn []string) (net.Conn, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -365,14 +341,11 @@ func (t *TunnelManager) sendHTTPConnect(stream net.Conn, target string) error {
 	return nil
 }
 
-// relay 在 client 和 proxy 之间双向转发数据。
-// [修复] 不再吞掉 io.Copy 的错误，而是通过 Logger 记录。
 func (t *TunnelManager) relay(client net.Conn, proxy net.Conn) int64 {
 	var wg sync.WaitGroup
 	var totalBytes int64
 	wg.Add(2)
 
-	// client → proxy（上行）
 	go func() {
 		defer wg.Done()
 		n, err := io.Copy(proxy, client)
@@ -387,7 +360,6 @@ func (t *TunnelManager) relay(client net.Conn, proxy net.Conn) int64 {
 		}
 	}()
 
-	// proxy → client（下行）
 	go func() {
 		defer wg.Done()
 		n, err := io.Copy(client, proxy)
