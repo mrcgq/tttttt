@@ -367,12 +367,10 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 		return nil, fmt.Errorf("h2: write headers: %w", err)
 	}
 
-if hasBody {
-		// 【关键修复】：开启一个 Goroutine 异步发送 Body
-		// 这是实现全双工隧道（不卡死）的核心！
-		go func() {
-			_ = c.sendBody(streamID, req.Body)
-		}()
+	if hasBody {
+		if err := c.sendBody(streamID, req.Body); err != nil {
+			return nil, fmt.Errorf("h2: write body: %w", err)
+		}
 	}
 
 	select {
@@ -574,3 +572,252 @@ func (b *streamBody) Close() error {
 		}
 	}
 }
+
+// ============================================================
+// ==================== 隧道支持（新增） ====================
+// ============================================================
+
+// H2TunnelConn 将一个 HTTP/2 stream 包装为 net.Conn，
+// 用于双向隧道数据传输。
+type H2TunnelConn struct {
+	client   *Client
+	streamID uint32
+	s        *stream
+
+	readBuf  []byte
+	readEOF  bool
+
+	localAddr  net.Addr
+	remoteAddr net.Addr
+
+	closeOnce sync.Once
+}
+
+// OpenTunnel 打开一个 HTTP/2 POST stream 用于双向隧道。
+//
+// 流程：
+//  1. 发送 HEADERS 帧（POST 请求，EndStream=false）
+//  2. 发送 DATA 帧（目标地址 + "\n"，EndStream=false）
+//  3. 等待服务器返回 200 HEADERS
+//  4. 返回 H2TunnelConn，后续 Read/Write 通过 DATA 帧传输
+func (c *Client) OpenTunnel(host, path, userAgent string, extraHeaders map[string]string, initialData []byte) (*H2TunnelConn, error) {
+	if atomic.LoadInt32(&c.state) != stateActive {
+		return nil, ErrClientClosed
+	}
+
+	// 分配 stream
+	c.mu.Lock()
+	streamID := c.nextStreamID
+	c.nextStreamID += 2
+	s := &stream{
+		id:         streamID,
+		headers:    make(chan *headerResult, 1),
+		data:       make(chan *dataChunk, 256), // 隧道用更大缓冲
+		done:       make(chan struct{}),
+		sendWindow: int64(c.serverInitWin),
+	}
+	c.streams[streamID] = s
+	c.mu.Unlock()
+	atomic.AddInt64(&c.metrics.StreamsOpened, 1)
+
+	cleanup := func() {
+		c.mu.Lock()
+		delete(c.streams, streamID)
+		c.mu.Unlock()
+	}
+
+	// 编码 HEADERS（利用指纹配置中的伪头部顺序）
+	headerBlock, err := c.encodeTunnelHeaders(host, path, userAgent, extraHeaders)
+	if err != nil {
+		cleanup()
+		return nil, fmt.Errorf("h2: encode tunnel headers: %w", err)
+	}
+
+	// 发送 HEADERS 帧（EndStream=false，因为后续还要发 DATA）
+	c.writeMu.Lock()
+	err = c.framer.WriteHeaders(http2.HeadersFrameParam{
+		StreamID:      streamID,
+		BlockFragment: headerBlock,
+		EndStream:     false,
+		EndHeaders:    true,
+	})
+	atomic.AddInt64(&c.metrics.FramesSent, 1)
+	c.writeMu.Unlock()
+	if err != nil {
+		cleanup()
+		return nil, fmt.Errorf("h2: write tunnel headers: %w", err)
+	}
+
+	// 发送初始数据（目标地址）
+	if len(initialData) > 0 {
+		c.writeMu.Lock()
+		err = c.framer.WriteData(streamID, false, initialData)
+		atomic.AddInt64(&c.metrics.FramesSent, 1)
+		atomic.AddInt64(&c.metrics.BytesWritten, int64(len(initialData)))
+		c.writeMu.Unlock()
+		if err != nil {
+			cleanup()
+			return nil, fmt.Errorf("h2: write tunnel initial data: %w", err)
+		}
+	}
+
+	// 等待服务器 HEADERS 响应（Worker 连接目标后返回 200）
+	select {
+	case hr := <-s.headers:
+		if hr.err != nil {
+			cleanup()
+			return nil, fmt.Errorf("h2: tunnel response error: %w", hr.err)
+		}
+		if hr.status != 200 {
+			cleanup()
+			return nil, fmt.Errorf("h2: tunnel server returned status %d", hr.status)
+		}
+	case <-c.closeCh:
+		cleanup()
+		return nil, ErrClientClosed
+	case <-time.After(c.responseTimeout):
+		cleanup()
+		return nil, fmt.Errorf("h2: tunnel response timeout after %v", c.responseTimeout)
+	}
+
+	return &H2TunnelConn{
+		client:     c,
+		streamID:   streamID,
+		s:          s,
+		localAddr:  c.conn.LocalAddr(),
+		remoteAddr: c.conn.RemoteAddr(),
+	}, nil
+}
+
+// encodeTunnelHeaders 按照指纹配置的伪头部顺序编码 POST 请求的 HPACK 头块。
+func (c *Client) encodeTunnelHeaders(host, path, userAgent string, extra map[string]string) ([]byte, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.hpackBuf.Reset()
+
+	pseudoValues := map[string]string{
+		":method":    "POST",
+		":authority": host,
+		":scheme":    "https",
+		":path":      path,
+	}
+
+	// 按照指纹配置中的顺序写入伪头部
+	for _, key := range c.fp.PseudoHeaderOrder {
+		val, ok := pseudoValues[key]
+		if !ok {
+			continue
+		}
+		_ = c.hpackEnc.WriteField(hpack.HeaderField{Name: key, Value: val})
+	}
+
+	// 常规头部
+	if userAgent != "" {
+		_ = c.hpackEnc.WriteField(hpack.HeaderField{Name: "user-agent", Value: userAgent})
+	}
+	_ = c.hpackEnc.WriteField(hpack.HeaderField{Name: "content-type", Value: "application/octet-stream"})
+	_ = c.hpackEnc.WriteField(hpack.HeaderField{Name: "accept", Value: "*/*"})
+
+	for k, v := range extra {
+		_ = c.hpackEnc.WriteField(hpack.HeaderField{Name: strings.ToLower(k), Value: v})
+	}
+
+	out := make([]byte, c.hpackBuf.Len())
+	copy(out, c.hpackBuf.Bytes())
+	return out, nil
+}
+
+// Read 从 H2 隧道 stream 读取数据（接收服务器推送的 DATA 帧）。
+func (t *H2TunnelConn) Read(p []byte) (int, error) {
+	if len(t.readBuf) > 0 {
+		n := copy(p, t.readBuf)
+		t.readBuf = t.readBuf[n:]
+		return n, nil
+	}
+	if t.readEOF {
+		return 0, io.EOF
+	}
+
+	select {
+	case chunk, ok := <-t.s.data:
+		if !ok {
+			t.readEOF = true
+			return 0, io.EOF
+		}
+		if chunk.endStream {
+			t.readEOF = true
+		}
+		n := copy(p, chunk.data)
+		if n < len(chunk.data) {
+			t.readBuf = chunk.data[n:]
+		}
+		if t.readEOF && len(t.readBuf) == 0 {
+			return n, io.EOF
+		}
+		return n, nil
+	case <-t.s.done:
+		t.readEOF = true
+		return 0, io.EOF
+	case <-t.client.closeCh:
+		return 0, ErrClientClosed
+	}
+}
+
+// Write 通过 H2 DATA 帧向隧道 stream 写入数据。
+func (t *H2TunnelConn) Write(p []byte) (int, error) {
+	if t.s.closed.Load() {
+		return 0, io.ErrClosedPipe
+	}
+	if t.client.IsClosed() {
+		return 0, ErrClientClosed
+	}
+
+	maxFrame := int(t.client.fp.GetMaxFrameSize())
+	total := 0
+	remaining := p
+
+	for len(remaining) > 0 {
+		chunk := remaining
+		if len(chunk) > maxFrame {
+			chunk = chunk[:maxFrame]
+		}
+
+		t.client.writeMu.Lock()
+		err := t.client.framer.WriteData(t.streamID, false, chunk)
+		atomic.AddInt64(&t.client.metrics.FramesSent, 1)
+		atomic.AddInt64(&t.client.metrics.BytesWritten, int64(len(chunk)))
+		t.client.writeMu.Unlock()
+		if err != nil {
+			return total, fmt.Errorf("h2: write tunnel data: %w", err)
+		}
+
+		total += len(chunk)
+		remaining = remaining[len(chunk):]
+	}
+
+	return total, nil
+}
+
+// Close 关闭隧道 stream（发送带 EndStream 的空 DATA 帧）。
+func (t *H2TunnelConn) Close() error {
+	t.closeOnce.Do(func() {
+		t.client.writeMu.Lock()
+		_ = t.client.framer.WriteData(t.streamID, true, nil)
+		atomic.AddInt64(&t.client.metrics.FramesSent, 1)
+		t.client.writeMu.Unlock()
+
+		t.s.closeDone()
+
+		t.client.mu.Lock()
+		delete(t.client.streams, t.streamID)
+		t.client.mu.Unlock()
+	})
+	return nil
+}
+
+func (t *H2TunnelConn) LocalAddr() net.Addr                { return t.localAddr }
+func (t *H2TunnelConn) RemoteAddr() net.Addr               { return t.remoteAddr }
+func (t *H2TunnelConn) SetDeadline(d time.Time) error      { return t.client.conn.SetDeadline(d) }
+func (t *H2TunnelConn) SetReadDeadline(d time.Time) error  { return t.client.conn.SetReadDeadline(d) }
+func (t *H2TunnelConn) SetWriteDeadline(d time.Time) error { return t.client.conn.SetWriteDeadline(d) }
