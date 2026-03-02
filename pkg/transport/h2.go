@@ -1,8 +1,6 @@
 package transport
 
 import (
-	"bufio"
-	"crypto/tls"
 	"fmt"
 	"io"
 	"net"
@@ -10,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	// 必须引入项目内置的 H2 引擎，绝不能用标准库
+	// 必须引入原作者写好的高级防检测 H2 引擎
 	"github.com/user/tls-client/internal/h2"
 )
 
@@ -47,23 +45,9 @@ func (t *H2Transport) Wrap(conn net.Conn, cfg *Config) (net.Conn, error) {
 		ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 	}
 
-	// 吸收了你的优秀思路：检测实际协商的协议
-	negotiatedProto := ""
-	if tlsConn, ok := conn.(*tls.Conn); ok {
-		negotiatedProto = tlsConn.ConnectionState().NegotiatedProtocol
-	}
-
-	if negotiatedProto == "h2" {
-		return newH2StreamConn(conn, cfg, host, path, ua)
-	}
-
-	// 回退到 HTTP/1.1 chunked
-	return newH1ChunkedConn(conn, cfg, host, path, ua)
+	// 核心修复：不要做任何 conn 的类型检测，直接相信系统并建立 H2 隧道
+	return newH2StreamConn(conn, cfg, host, path, ua)
 }
-
-// =============================================================================
-// HTTP/2 真正实现 (融合了 prefixReader 和 internal/h2)
-// =============================================================================
 
 type h2StreamConn struct {
 	rawConn  net.Conn
@@ -103,15 +87,15 @@ func (c *h2StreamConn) doH2Request(cfg *Config, host, path, ua string) {
 		}
 	}()
 
-	// 1. 核心修复：使用项目自带的伪装 H2 客户端
-	fp := h2.ChromeDefaultConfig() // 强行注入 Chrome 指纹
+	// 强制注入 Chrome 浏览器指纹！
+	fp := h2.ChromeDefaultConfig()
 	client, err := h2.NewClient(c.rawConn, &fp)
 	if err != nil {
 		c.initErr = fmt.Errorf("h2: create custom client: %w", err)
 		return
 	}
 
-	// 2. 你的优秀代码：使用 prefixReader 注入 Target
+	// 巧妙利用 prefixReader，在数据的最开头塞入目标地址(Target)
 	var bodyReader io.Reader = c.pr
 	if cfg.Target != "" {
 		bodyReader = newPrefixReader(cfg.Target+"\n", c.pr)
@@ -130,7 +114,7 @@ func (c *h2StreamConn) doH2Request(cfg *Config, host, path, ua string) {
 		req.Header.Set(k, v)
 	}
 
-	// 3. 执行指纹伪装的 H2 请求
+	// 发起带有指纹伪装的 H2 请求
 	resp, err := client.Do(req)
 	if err != nil {
 		c.initErr = fmt.Errorf("h2: request failed: %w", err)
@@ -190,153 +174,9 @@ func (c *h2StreamConn) SetDeadline(t time.Time) error      { return c.rawConn.Se
 func (c *h2StreamConn) SetReadDeadline(t time.Time) error  { return c.rawConn.SetReadDeadline(t) }
 func (c *h2StreamConn) SetWriteDeadline(t time.Time) error { return c.rawConn.SetWriteDeadline(t) }
 
-// =============================================================================
-// HTTP/1.1 Chunked 回退实现 (完全保留你的优秀代码)
-// =============================================================================
-type h1ChunkedConn struct {
-	rawConn    net.Conn
-	host       string
-	path       string
-	target     string
-	ua         string
-	headers    map[string]string
-	initOnce   *sync.Once
-	initErr    error
-	respReader *bufio.Reader
-	writeMu    sync.Mutex
-	closed     bool
-	closeMu    sync.Mutex
-}
-
-func newH1ChunkedConn(conn net.Conn, cfg *Config, host, path, ua string) (*h1ChunkedConn, error) {
-	return &h1ChunkedConn{
-		rawConn:  conn,
-		host:     host,
-		path:     path,
-		target:   cfg.Target,
-		ua:       ua,
-		headers:  cfg.Headers,
-		initOnce: &sync.Once{},
-	}, nil
-}
-
-func (c *h1ChunkedConn) init() {
-	c.initOnce.Do(func() {
-		c.initErr = c.doInit()
-	})
-}
-
-func (c *h1ChunkedConn) doInit() error {
-	var reqBuf[]byte
-	reqBuf = append(reqBuf, fmt.Sprintf("POST %s HTTP/1.1\r\n", c.path)...)
-	reqBuf = append(reqBuf, fmt.Sprintf("Host: %s\r\n", c.host)...)
-	reqBuf = append(reqBuf, fmt.Sprintf("User-Agent: %s\r\n", c.ua)...)
-	reqBuf = append(reqBuf, "Content-Type: application/octet-stream\r\n"...)
-	reqBuf = append(reqBuf, "Transfer-Encoding: chunked\r\n"...)
-	reqBuf = append(reqBuf, "Connection: keep-alive\r\n"...)
-
-	for k, v := range c.headers {
-		reqBuf = append(reqBuf, fmt.Sprintf("%s: %s\r\n", k, v)...)
-	}
-	reqBuf = append(reqBuf, "\r\n"...)
-
-	if _, err := c.rawConn.Write(reqBuf); err != nil {
-		return fmt.Errorf("h1: write request headers: %w", err)
-	}
-
-	if c.target != "" {
-		targetLine := c.target + "\n"
-		chunk := fmt.Sprintf("%x\r\n%s\r\n", len(targetLine), targetLine)
-		if _, err := c.rawConn.Write([]byte(chunk)); err != nil {
-			return fmt.Errorf("h1: write target chunk: %w", err)
-		}
-	}
-
-	c.respReader = bufio.NewReader(c.rawConn)
-	resp, err := http.ReadResponse(c.respReader, nil)
-	if err != nil {
-		return fmt.Errorf("h1: read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusSwitchingProtocols {
-		resp.Body.Close()
-		return fmt.Errorf("h1: server returned %s", resp.Status)
-	}
-
-	return nil
-}
-
-func (c *h1ChunkedConn) Read(p[]byte) (int, error) {
-	c.init()
-	if c.initErr != nil {
-		return 0, c.initErr
-	}
-
-	c.closeMu.Lock()
-	if c.closed {
-		c.closeMu.Unlock()
-		return 0, io.EOF
-	}
-	c.closeMu.Unlock()
-
-	return c.respReader.Read(p)
-}
-
-func (c *h1ChunkedConn) Write(p[]byte) (int, error) {
-	c.init()
-	if c.initErr != nil {
-		return 0, c.initErr
-	}
-
-	c.closeMu.Lock()
-	if c.closed {
-		c.closeMu.Unlock()
-		return 0, io.ErrClosedPipe
-	}
-	c.closeMu.Unlock()
-
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
-
-	chunk := fmt.Sprintf("%x\r\n", len(p))
-	if _, err := c.rawConn.Write([]byte(chunk)); err != nil {
-		return 0, err
-	}
-	if _, err := c.rawConn.Write(p); err != nil {
-		return 0, err
-	}
-	if _, err := c.rawConn.Write([]byte("\r\n")); err != nil {
-		return 0, err
-	}
-
-	return len(p), nil
-}
-
-func (c *h1ChunkedConn) Close() error {
-	c.closeMu.Lock()
-	if c.closed {
-		c.closeMu.Unlock()
-		return nil
-	}
-	c.closed = true
-	c.closeMu.Unlock()
-
-	c.writeMu.Lock()
-	_, _ = c.rawConn.Write([]byte("0\r\n\r\n"))
-	c.writeMu.Unlock()
-
-	return c.rawConn.Close()
-}
-
-func (c *h1ChunkedConn) LocalAddr() net.Addr                { return c.rawConn.LocalAddr() }
-func (c *h1ChunkedConn) RemoteAddr() net.Addr               { return c.rawConn.RemoteAddr() }
-func (c *h1ChunkedConn) SetDeadline(t time.Time) error      { return c.rawConn.SetDeadline(t) }
-func (c *h1ChunkedConn) SetReadDeadline(t time.Time) error  { return c.rawConn.SetReadDeadline(t) }
-func (c *h1ChunkedConn) SetWriteDeadline(t time.Time) error { return c.rawConn.SetWriteDeadline(t) }
-
-// =============================================================================
-// 辅助工具 (完全保留)
-// =============================================================================
+// ==================
+// 优雅注入 Target 头的核心工具
+// ==================
 type prefixReader struct {
 	prefix[]byte
 	pos    int
