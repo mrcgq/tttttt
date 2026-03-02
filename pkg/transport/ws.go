@@ -1,4 +1,3 @@
-
 package transport
 
 import (
@@ -47,21 +46,18 @@ func (t *WSTransport) Wrap(conn net.Conn, cfg *Config) (net.Conn, error) {
 		host = "localhost"
 	}
 
-	// 生成 WebSocket Key
 	keyBytes := make([]byte, 16)
 	if _, err := rand.Read(keyBytes); err != nil {
 		return nil, fmt.Errorf("ws: generate key: %w", err)
 	}
 	wsKey := base64.StdEncoding.EncodeToString(keyBytes)
 
-	// 构建升级请求
 	reqStr := fmt.Sprintf("GET %s HTTP/1.1\r\n", path)
 	reqStr += fmt.Sprintf("Host: %s\r\n", host)
 	reqStr += "Upgrade: websocket\r\n"
 	reqStr += "Connection: Upgrade\r\n"
 	reqStr += fmt.Sprintf("Sec-WebSocket-Key: %s\r\n", wsKey)
 	reqStr += "Sec-WebSocket-Version: 13\r\n"
-	// 注意：不请求 permessage-deflate 压缩，避免解压缩问题
 	if cfg.UserAgent != "" {
 		reqStr += fmt.Sprintf("User-Agent: %s\r\n", cfg.UserAgent)
 	}
@@ -71,12 +67,10 @@ func (t *WSTransport) Wrap(conn net.Conn, cfg *Config) (net.Conn, error) {
 	}
 	reqStr += "\r\n"
 
-	// 发送升级请求
 	if _, err := conn.Write([]byte(reqStr)); err != nil {
 		return nil, fmt.Errorf("ws: send upgrade: %w", err)
 	}
 
-	// 读取响应
 	br := bufio.NewReaderSize(conn, 4096)
 	resp, err := http.ReadResponse(br, nil)
 	if err != nil {
@@ -88,7 +82,6 @@ func (t *WSTransport) Wrap(conn net.Conn, cfg *Config) (net.Conn, error) {
 		return nil, fmt.Errorf("ws: upgrade failed: %s", resp.Status)
 	}
 
-	// 验证 Accept 头
 	expectedAccept := computeAcceptKey(wsKey)
 	if resp.Header.Get("Sec-WebSocket-Accept") != expectedAccept {
 		return nil, fmt.Errorf("ws: invalid Sec-WebSocket-Accept")
@@ -112,7 +105,6 @@ type wsConn struct {
 	br      *bufio.Reader
 	writeMu sync.Mutex
 
-	// 分片重组缓冲区
 	fragmentBuf []byte
 	fragmenting bool
 
@@ -152,14 +144,13 @@ func (c *wsConn) keepAlive() {
 			c.writeMu.Lock()
 			pingData := make([]byte, 8)
 			_, _ = rand.Read(pingData)
-			_, _ = writeFrame(c.conn, 0x09, pingData) // Ping
+			_, _ = writeFrame(c.conn, 0x09, pingData)
 			c.writeMu.Unlock()
 		}
 	}
 }
 
 func (c *wsConn) Read(p []byte) (int, error) {
-	// 先返回缓冲区中的数据
 	if len(c.readBuf) > 0 {
 		n := copy(p, c.readBuf)
 		c.readBuf = c.readBuf[n:]
@@ -177,7 +168,7 @@ func (c *wsConn) Read(p []byte) (int, error) {
 		}
 
 		switch opcode {
-		case 0x00: // Continuation
+		case 0x00:
 			if c.fragmenting {
 				c.fragmentBuf = append(c.fragmentBuf, payload...)
 				if fin {
@@ -185,34 +176,33 @@ func (c *wsConn) Read(p []byte) (int, error) {
 					payload = c.fragmentBuf
 					c.fragmentBuf = nil
 				} else {
-					continue // 继续读取下一帧
+					continue
 				}
 			} else {
 				continue
 			}
 
-		case 0x01, 0x02: // Text, Binary
+		case 0x01, 0x02:
 			if !fin {
-				// 分片开始
 				c.fragmenting = true
 				c.fragmentBuf = append([]byte(nil), payload...)
 				continue
 			}
 
-		case 0x08: // Close
+		case 0x08:
 			c.readEOF = true
 			c.writeMu.Lock()
 			_, _ = WriteCloseFrame(c.conn, 1000)
 			c.writeMu.Unlock()
 			return 0, io.EOF
 
-		case 0x09: // Ping
+		case 0x09:
 			c.writeMu.Lock()
-			_, _ = writeFrame(c.conn, 0x0A, payload) // Pong
+			_, _ = writeFrame(c.conn, 0x0A, payload)
 			c.writeMu.Unlock()
 			continue
 
-		case 0x0A: // Pong
+		case 0x0A:
 			c.lastPong.Store(time.Now().UnixNano())
 			continue
 
@@ -255,20 +245,16 @@ func (c *wsConn) Write(p []byte) (int, error) {
 		var fin bool
 
 		if isFirstFrame && isLastFrame {
-			// 单帧消息
-			opcode = 0x02 // Binary
+			opcode = 0x02
 			fin = true
 		} else if isFirstFrame && !isLastFrame {
-			// 分片首帧
-			opcode = 0x02 // Binary
+			opcode = 0x02
 			fin = false
 		} else if !isFirstFrame && isLastFrame {
-			// 分片末帧
-			opcode = 0x00 // Continuation
+			opcode = 0x00
 			fin = true
 		} else {
-			// 分片中间帧
-			opcode = 0x00 // Continuation
+			opcode = 0x00
 			fin = false
 		}
 
@@ -299,7 +285,3 @@ func (c *wsConn) RemoteAddr() net.Addr               { return c.conn.RemoteAddr(
 func (c *wsConn) SetDeadline(t time.Time) error      { return c.conn.SetDeadline(t) }
 func (c *wsConn) SetReadDeadline(t time.Time) error  { return c.conn.SetReadDeadline(t) }
 func (c *wsConn) SetWriteDeadline(t time.Time) error { return c.conn.SetWriteDeadline(t) }
-
-
-
-
