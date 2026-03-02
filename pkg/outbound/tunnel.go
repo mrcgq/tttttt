@@ -1,3 +1,4 @@
+
 package outbound
 
 import (
@@ -48,9 +49,16 @@ func NewNodeConfig(
 		UserAgent: profile.UserAgent,
 		Headers:   nodeCfg.TransportOpts.WSHeaders,
 	}
-	if t.Name() == "h2" && nodeCfg.TransportOpts.H2Path != "" {
-		tcfg.Path = nodeCfg.TransportOpts.H2Path
+
+	// H2 路径处理
+	if t.Name() == "h2" {
+		if nodeCfg.TransportOpts.H2Path != "" {
+			tcfg.Path = nodeCfg.TransportOpts.H2Path
+		} else if tcfg.Path == "" {
+			tcfg.Path = "/tunnel" // 默认 H2 路径
+		}
 	}
+
 	tcfg.Normalize()
 	if tcfg.Host == "" {
 		tcfg.Host = nodeCfg.SNI
@@ -89,10 +97,24 @@ type TunnelStats struct {
 
 // TunnelManager handles outbound proxy tunnels.
 type TunnelManager struct {
-	Node   *NodeConfig
-	Logger *zap.Logger
-	Pool   *engine.ConnPool
-	stats  TunnelStats
+	Node       *NodeConfig
+	Logger     *zap.Logger
+	Pool       *engine.ConnPool
+	ProxyIPMgr *ProxyIPManager // 新增：ProxyIP 管理器
+	stats      TunnelStats
+}
+
+// ProxyIPManager 简化的 ProxyIP 管理器接口
+type ProxyIPManager interface {
+	Select() *ProxyIPEntry
+	MarkFailed(address string)
+	MarkSuccess(address string)
+}
+
+// ProxyIPEntry 代表一个 ProxyIP
+type ProxyIPEntry struct {
+	Address string
+	SNI     string
 }
 
 func NewTunnelManager(node *NodeConfig, logger *zap.Logger) *TunnelManager {
@@ -101,6 +123,11 @@ func NewTunnelManager(node *NodeConfig, logger *zap.Logger) *TunnelManager {
 		Logger: logger,
 		Pool:   engine.NewConnPool(10, 90*time.Second),
 	}
+}
+
+// SetProxyIPManager 设置 ProxyIP 管理器
+func (t *TunnelManager) SetProxyIPManager(mgr ProxyIPManager) {
+	t.ProxyIPMgr = mgr
 }
 
 // Stats returns tunnel operation statistics.
@@ -123,6 +150,25 @@ func (t *TunnelManager) HandleConnect(clientConn net.Conn, target, domain string
 		zap.String("target", target),
 		zap.String("domain", domain))
 
+	// 确定使用的节点地址和SNI
+	nodeAddr := t.Node.Address
+	nodeSNI := t.Node.SNI
+
+	// 如果启用了 ProxyIP，使用 ProxyIP 管理器选择
+	var selectedProxyIP *ProxyIPEntry
+	if t.ProxyIPMgr != nil {
+		selectedProxyIP = t.ProxyIPMgr.Select()
+		if selectedProxyIP != nil {
+			nodeAddr = selectedProxyIP.Address
+			if selectedProxyIP.SNI != "" {
+				nodeSNI = selectedProxyIP.SNI
+			}
+			t.Logger.Debug("tunnel: using proxyip",
+				zap.String("address", nodeAddr),
+				zap.String("sni", nodeSNI))
+		}
+	}
+
 	var stream net.Conn
 	var activeTransport transport.Transport
 	var err error
@@ -131,12 +177,13 @@ func (t *TunnelManager) HandleConnect(clientConn net.Conn, target, domain string
 		var usedTransport transport.Transport
 		stream, usedTransport, err = t.Node.Fallback.WrapWithFallback(
 			func(alpn []string) (net.Conn, error) {
-				return t.dialNode(alpn)
+				return t.dialNodeWithAddr(nodeAddr, nodeSNI, alpn)
 			},
 			t.Node.TransportCfg,
 		)
 		if err != nil {
 			atomic.AddInt64(&t.stats.TotalErrors, 1)
+			t.markProxyIPFailed(selectedProxyIP)
 			t.Logger.Error("tunnel: all transports failed",
 				zap.String("node", t.Node.Name),
 				zap.String("target", target),
@@ -146,58 +193,37 @@ func (t *TunnelManager) HandleConnect(clientConn net.Conn, target, domain string
 		activeTransport = usedTransport
 	} else {
 		alpn := t.Node.Transport.ALPNProtos()
-		t.Logger.Info("tunnel: dialing node",
+		t.Logger.Debug("tunnel: dialing node",
 			zap.String("node", t.Node.Name),
+			zap.String("address", nodeAddr),
 			zap.Strings("alpn", alpn))
 
-		tlsConn, err2 := t.dialNode(alpn)
+		tlsConn, err2 := t.dialNodeWithAddr(nodeAddr, nodeSNI, alpn)
 		if err2 != nil {
 			atomic.AddInt64(&t.stats.TotalErrors, 1)
+			t.markProxyIPFailed(selectedProxyIP)
 			t.Logger.Error("tunnel: dial failed",
 				zap.String("node", t.Node.Name),
 				zap.Error(err2))
 			return
 		}
 
-		t.Logger.Info("tunnel: tls connected",
+		t.Logger.Debug("tunnel: tls connected",
 			zap.String("node", t.Node.Name),
 			zap.String("target", target))
 
 		activeTransport = t.Node.Transport
 		transportName := activeTransport.Name()
 
-		if transportName == "h2" && t.Node.TransportCfg.IsProxyMode() {
-			h2Cfg := t.Node.TransportCfg.Clone()
-			h2Cfg.Target = target
+		// 准备 transport 配置
+		transportCfg := t.Node.TransportCfg.Clone()
+		transportCfg.Target = target
 
-			stream, err = t.Node.Transport.Wrap(tlsConn, h2Cfg)
-			if err != nil {
-				tlsConn.Close()
-				atomic.AddInt64(&t.stats.TotalErrors, 1)
-				t.Logger.Error("tunnel: h2 proxy wrap failed",
-					zap.String("node", t.Node.Name),
-					zap.String("target", target),
-					zap.Error(err))
-				return
-			}
-
-			t.Logger.Info("tunnel: established (h2 proxy mode)",
-				zap.String("node", t.Node.Name),
-				zap.String("target", target))
-
-			n := relay(clientConn, stream)
-			atomic.AddInt64(&t.stats.TotalBytes, n)
-			t.Logger.Info("tunnel: relay finished",
-				zap.String("target", target),
-				zap.Int64("bytes", n))
-			stream.Close()
-			return
-		}
-
-		stream, err = t.Node.Transport.Wrap(tlsConn, t.Node.TransportCfg)
+		stream, err = activeTransport.Wrap(tlsConn, transportCfg)
 		if err != nil {
 			tlsConn.Close()
 			atomic.AddInt64(&t.stats.TotalErrors, 1)
+			t.markProxyIPFailed(selectedProxyIP)
 			t.Logger.Error("tunnel: transport wrap failed",
 				zap.String("node", t.Node.Name),
 				zap.String("transport", transportName),
@@ -205,15 +231,20 @@ func (t *TunnelManager) HandleConnect(clientConn net.Conn, target, domain string
 			return
 		}
 
-		t.Logger.Info("tunnel: transport wrapped",
+		t.Logger.Debug("tunnel: transport wrapped",
 			zap.String("transport", transportName))
 	}
 	defer stream.Close()
 
+	// 标记 ProxyIP 成功
+	t.markProxyIPSuccess(selectedProxyIP)
+
 	transportName := activeTransport.Name()
+
+	// 根据传输类型发送目标信息
 	switch transportName {
 	case "ws":
-		t.Logger.Info("tunnel: sending ws target",
+		t.Logger.Debug("tunnel: sending ws target",
 			zap.String("target", target))
 		if err := t.sendWSTarget(stream, target); err != nil {
 			atomic.AddInt64(&t.stats.TotalErrors, 1)
@@ -221,12 +252,12 @@ func (t *TunnelManager) HandleConnect(clientConn net.Conn, target, domain string
 			return
 		}
 	case "h2":
-		if err := t.sendH2Target(stream, target); err != nil {
-			atomic.AddInt64(&t.stats.TotalErrors, 1)
-			t.Logger.Error("tunnel: send h2 target failed", zap.Error(err))
-			return
-		}
-	default:
+		// H2 模式：目标已在 Wrap 时通过 TransportCfg.Target 传递
+		// 新的 h2.go 实现会在初始化时发送目标
+		t.Logger.Debug("tunnel: h2 target sent via transport config",
+			zap.String("target", target))
+	case "raw":
+		// RAW 模式：发送 HTTP CONNECT
 		if err := t.sendHTTPConnect(stream, target); err != nil {
 			atomic.AddInt64(&t.stats.TotalErrors, 1)
 			t.Logger.Error("tunnel: send CONNECT failed", zap.Error(err))
@@ -247,13 +278,30 @@ func (t *TunnelManager) HandleConnect(clientConn net.Conn, target, domain string
 		zap.Int64("bytes", n))
 }
 
+func (t *TunnelManager) markProxyIPFailed(entry *ProxyIPEntry) {
+	if entry != nil && t.ProxyIPMgr != nil {
+		t.ProxyIPMgr.MarkFailed(entry.Address)
+	}
+}
+
+func (t *TunnelManager) markProxyIPSuccess(entry *ProxyIPEntry) {
+	if entry != nil && t.ProxyIPMgr != nil {
+		t.ProxyIPMgr.MarkSuccess(entry.Address)
+	}
+}
+
 func (t *TunnelManager) dialNode(alpn []string) (net.Conn, error) {
+	return t.dialNodeWithAddr(t.Node.Address, t.Node.SNI, alpn)
+}
+
+func (t *TunnelManager) dialNodeWithAddr(address, sni string, alpn []string) (net.Conn, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	poolKey := fmt.Sprintf("%s:%s:%v", t.Node.Address, t.Node.SNI, alpn)
+
+	poolKey := fmt.Sprintf("%s:%s:%v", address, sni, alpn)
 	conn, err := t.Pool.Get(ctx, poolKey, &engine.DialConfig{
-		Address:    t.Node.Address,
-		SNI:        t.Node.SNI,
+		Address:    address,
+		SNI:        sni,
 		Profile:    t.Node.Profile,
 		VerifyMode: t.Node.VerifyMode,
 		ALPN:       alpn,
@@ -264,11 +312,6 @@ func (t *TunnelManager) dialNode(alpn []string) (net.Conn, error) {
 
 func (t *TunnelManager) sendWSTarget(conn net.Conn, target string) error {
 	_, err := conn.Write([]byte(target))
-	return err
-}
-
-func (t *TunnelManager) sendH2Target(conn net.Conn, target string) error {
-	_, err := conn.Write([]byte(target + "\n"))
 	return err
 }
 
@@ -294,6 +337,7 @@ func relay(client net.Conn, proxy net.Conn) int64 {
 	var totalBytes int64
 	wg.Add(2)
 
+	// client -> proxy
 	go func() {
 		defer wg.Done()
 		n, _ := io.Copy(proxy, client)
@@ -303,6 +347,7 @@ func relay(client net.Conn, proxy net.Conn) int64 {
 		}
 	}()
 
+	// proxy -> client
 	go func() {
 		defer wg.Done()
 		n, _ := io.Copy(client, proxy)
@@ -321,3 +366,4 @@ func (t *TunnelManager) Close() {
 		t.Pool.Close()
 	}
 }
+
