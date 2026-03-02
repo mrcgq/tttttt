@@ -36,7 +36,7 @@ type Config struct {
 	MaxIdleTime int
 	Target      string
 
-	// H2Config 传递 HTTP/2 指纹配置（类型为 *h2.FingerprintConfig）
+	// H2Config 保留用于未来可能的真正 HTTP/2 支持
 	H2Config interface{}
 }
 
