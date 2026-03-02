@@ -22,6 +22,7 @@ var (
 	ErrStreamReset  = errors.New("h2: stream reset")
 	ErrGoAway       = errors.New("h2: received GOAWAY")
 	ErrFlowControl  = errors.New("h2: flow control violation")
+	ErrNotReady     = errors.New("h2: settings exchange not completed")
 )
 
 const (
@@ -30,7 +31,6 @@ const (
 	stateClosed = 2
 )
 
-// ClientMetrics tracks connection-level metrics for observability.
 type ClientMetrics struct {
 	StreamsOpened  int64
 	StreamsClosed  int64
@@ -40,8 +40,6 @@ type ClientMetrics struct {
 	BytesWritten   int64
 }
 
-// Client is a custom HTTP/2 client that provides full control over
-// SETTINGS, WINDOW_UPDATE, and pseudo-header ordering for fingerprinting.
 type Client struct {
 	conn   net.Conn
 	framer *http2.Framer
@@ -65,6 +63,10 @@ type Client struct {
 	serverInitWin  uint32
 
 	responseTimeout time.Duration
+
+	// SETTINGS 交换信号
+	settingsReady chan struct{}
+	settingsOnce  sync.Once
 
 	metrics ClientMetrics
 }
@@ -122,7 +124,6 @@ type dataChunk struct {
 	endStream bool
 }
 
-// NewClient creates a custom H2 client on an existing TLS connection.
 func NewClient(conn net.Conn, fp *FingerprintConfig) (*Client, error) {
 	c := &Client{
 		conn:            conn,
@@ -133,6 +134,7 @@ func NewClient(conn net.Conn, fp *FingerprintConfig) (*Client, error) {
 		connSendWindow:  65535,
 		serverInitWin:   65535,
 		responseTimeout: 30 * time.Second,
+		settingsReady:   make(chan struct{}),
 	}
 
 	preface := BuildPreface(fp)
@@ -142,7 +144,7 @@ func NewClient(conn net.Conn, fp *FingerprintConfig) (*Client, error) {
 
 	c.framer = http2.NewFramer(conn, conn)
 	c.framer.SetMaxReadFrameSize(1 << 24)
-	c.framer.ReadMetaHeaders = hpack.NewDecoder(4096, nil)
+	c.framer.ReadMetaHeaders = hpack.NewDecoder(65536, nil)
 	c.framer.MaxHeaderListSize = 262144
 
 	c.hpackEnc = hpack.NewEncoder(&c.hpackBuf)
@@ -152,7 +154,21 @@ func NewClient(conn net.Conn, fp *FingerprintConfig) (*Client, error) {
 	return c, nil
 }
 
-// SetResponseTimeout configures the maximum time to wait for response headers.
+// WaitReady 阻塞直到收到并确认服务器的第一个 SETTINGS 帧。
+func (c *Client) WaitReady(timeout time.Duration) error {
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	select {
+	case <-c.settingsReady:
+		return nil
+	case <-c.closeCh:
+		return ErrClientClosed
+	case <-time.After(timeout):
+		return fmt.Errorf("h2: settings exchange timeout after %v", timeout)
+	}
+}
+
 func (c *Client) SetResponseTimeout(d time.Duration) {
 	c.responseTimeout = d
 }
@@ -233,6 +249,11 @@ func (c *Client) handleServerSettings(f *http2.SettingsFrame) {
 	_ = c.framer.WriteSettingsAck()
 	atomic.AddInt64(&c.metrics.FramesSent, 1)
 	c.writeMu.Unlock()
+
+	// 通知 WaitReady：SETTINGS 交换完成
+	c.settingsOnce.Do(func() {
+		close(c.settingsReady)
+	})
 }
 
 func (c *Client) handleWindowUpdate(f *http2.WindowUpdateFrame) {
@@ -316,12 +337,13 @@ func (c *Client) handleRSTStream(f *http2.RSTStreamFrame) {
 		return
 	}
 
-	s.trySendHeaders(&headerResult{err: ErrStreamReset})
+	// 将 RST_STREAM 错误码包含在错误信息中
+	rstErr := fmt.Errorf("h2: stream reset (code=%v, stream=%d)", f.ErrCode, f.StreamID)
+	s.trySendHeaders(&headerResult{err: rstErr})
 	s.closeDone()
 	atomic.AddInt64(&c.metrics.StreamsClosed, 1)
 }
 
-// Do sends an HTTP request and returns the response.
 func (c *Client) Do(req *http.Request) (*http.Response, error) {
 	if atomic.LoadInt32(&c.state) != stateActive {
 		return nil, ErrClientClosed
@@ -485,6 +507,10 @@ func (c *Client) closeInternal(err error) {
 		atomic.StoreInt32(&c.state, stateClosed)
 		close(c.closeCh)
 
+		c.settingsOnce.Do(func() {
+			close(c.settingsReady)
+		})
+
 		c.mu.Lock()
 		for _, s := range c.streams {
 			s.trySendHeaders(&headerResult{err: ErrClientClosed})
@@ -496,18 +522,15 @@ func (c *Client) closeInternal(err error) {
 	})
 }
 
-// Close gracefully closes the H2 client.
 func (c *Client) Close() error {
 	c.closeInternal(nil)
 	return nil
 }
 
-// IsClosed returns true if the client has been closed.
 func (c *Client) IsClosed() bool {
 	return atomic.LoadInt32(&c.state) == stateClosed
 }
 
-// Metrics returns a snapshot of connection metrics.
 func (c *Client) Metrics() ClientMetrics {
 	return ClientMetrics{
 		StreamsOpened:  atomic.LoadInt64(&c.metrics.StreamsOpened),
@@ -519,7 +542,6 @@ func (c *Client) Metrics() ClientMetrics {
 	}
 }
 
-// streamBody implements io.ReadCloser for response body.
 type streamBody struct {
 	stream  *stream
 	closeCh chan struct{}
@@ -536,7 +558,6 @@ func (b *streamBody) Read(p []byte) (int, error) {
 	if b.eof {
 		return 0, io.EOF
 	}
-
 	select {
 	case chunk, ok := <-b.stream.data:
 		if !ok {
@@ -574,18 +595,17 @@ func (b *streamBody) Close() error {
 }
 
 // ============================================================
-// ==================== 隧道支持（新增） ====================
+// ==================== 隧道支持 ==============================
 // ============================================================
 
-// H2TunnelConn 将一个 HTTP/2 stream 包装为 net.Conn，
-// 用于双向隧道数据传输。
+// H2TunnelConn 将 HTTP/2 stream 包装为 net.Conn。
 type H2TunnelConn struct {
 	client   *Client
 	streamID uint32
 	s        *stream
 
-	readBuf  []byte
-	readEOF  bool
+	readBuf []byte
+	readEOF bool
 
 	localAddr  net.Addr
 	remoteAddr net.Addr
@@ -593,26 +613,20 @@ type H2TunnelConn struct {
 	closeOnce sync.Once
 }
 
-// OpenTunnel 打开一个 HTTP/2 POST stream 用于双向隧道。
-//
-// 流程：
-//  1. 发送 HEADERS 帧（POST 请求，EndStream=false）
-//  2. 发送 DATA 帧（目标地址 + "\n"，EndStream=false）
-//  3. 等待服务器返回 200 HEADERS
-//  4. 返回 H2TunnelConn，后续 Read/Write 通过 DATA 帧传输
-func (c *Client) OpenTunnel(host, path, userAgent string, extraHeaders map[string]string, initialData []byte) (*H2TunnelConn, error) {
+// OpenTunnel 打开一个 HTTP/2 POST stream 隧道。
+// target 地址通过 X-Target header 发送给 Worker（避免 body 缓冲问题）。
+func (c *Client) OpenTunnel(host, path, userAgent string, extraHeaders map[string]string) (*H2TunnelConn, error) {
 	if atomic.LoadInt32(&c.state) != stateActive {
 		return nil, ErrClientClosed
 	}
 
-	// 分配 stream
 	c.mu.Lock()
 	streamID := c.nextStreamID
 	c.nextStreamID += 2
 	s := &stream{
 		id:         streamID,
 		headers:    make(chan *headerResult, 1),
-		data:       make(chan *dataChunk, 256), // 隧道用更大缓冲
+		data:       make(chan *dataChunk, 256),
 		done:       make(chan struct{}),
 		sendWindow: int64(c.serverInitWin),
 	}
@@ -626,14 +640,13 @@ func (c *Client) OpenTunnel(host, path, userAgent string, extraHeaders map[strin
 		c.mu.Unlock()
 	}
 
-	// 编码 HEADERS（利用指纹配置中的伪头部顺序）
 	headerBlock, err := c.encodeTunnelHeaders(host, path, userAgent, extraHeaders)
 	if err != nil {
 		cleanup()
 		return nil, fmt.Errorf("h2: encode tunnel headers: %w", err)
 	}
 
-	// 发送 HEADERS 帧（EndStream=false，因为后续还要发 DATA）
+	// 发送 HEADERS 帧（EndStream=false），target 在 X-Target header 中
 	c.writeMu.Lock()
 	err = c.framer.WriteHeaders(http2.HeadersFrameParam{
 		StreamID:      streamID,
@@ -648,25 +661,12 @@ func (c *Client) OpenTunnel(host, path, userAgent string, extraHeaders map[strin
 		return nil, fmt.Errorf("h2: write tunnel headers: %w", err)
 	}
 
-	// 发送初始数据（目标地址）
-	if len(initialData) > 0 {
-		c.writeMu.Lock()
-		err = c.framer.WriteData(streamID, false, initialData)
-		atomic.AddInt64(&c.metrics.FramesSent, 1)
-		atomic.AddInt64(&c.metrics.BytesWritten, int64(len(initialData)))
-		c.writeMu.Unlock()
-		if err != nil {
-			cleanup()
-			return nil, fmt.Errorf("h2: write tunnel initial data: %w", err)
-		}
-	}
-
-	// 等待服务器 HEADERS 响应（Worker 连接目标后返回 200）
+	// 等待 200 响应
 	select {
 	case hr := <-s.headers:
 		if hr.err != nil {
 			cleanup()
-			return nil, fmt.Errorf("h2: tunnel response error: %w", hr.err)
+			return nil, fmt.Errorf("h2: tunnel response: %w", hr.err)
 		}
 		if hr.status != 200 {
 			cleanup()
@@ -689,7 +689,6 @@ func (c *Client) OpenTunnel(host, path, userAgent string, extraHeaders map[strin
 	}, nil
 }
 
-// encodeTunnelHeaders 按照指纹配置的伪头部顺序编码 POST 请求的 HPACK 头块。
 func (c *Client) encodeTunnelHeaders(host, path, userAgent string, extra map[string]string) ([]byte, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -703,7 +702,6 @@ func (c *Client) encodeTunnelHeaders(host, path, userAgent string, extra map[str
 		":path":      path,
 	}
 
-	// 按照指纹配置中的顺序写入伪头部
 	for _, key := range c.fp.PseudoHeaderOrder {
 		val, ok := pseudoValues[key]
 		if !ok {
@@ -712,13 +710,13 @@ func (c *Client) encodeTunnelHeaders(host, path, userAgent string, extra map[str
 		_ = c.hpackEnc.WriteField(hpack.HeaderField{Name: key, Value: val})
 	}
 
-	// 常规头部
 	if userAgent != "" {
 		_ = c.hpackEnc.WriteField(hpack.HeaderField{Name: "user-agent", Value: userAgent})
 	}
 	_ = c.hpackEnc.WriteField(hpack.HeaderField{Name: "content-type", Value: "application/octet-stream"})
 	_ = c.hpackEnc.WriteField(hpack.HeaderField{Name: "accept", Value: "*/*"})
 
+	// 写入额外头部（包括 x-target）
 	for k, v := range extra {
 		_ = c.hpackEnc.WriteField(hpack.HeaderField{Name: strings.ToLower(k), Value: v})
 	}
@@ -728,7 +726,7 @@ func (c *Client) encodeTunnelHeaders(host, path, userAgent string, extra map[str
 	return out, nil
 }
 
-// Read 从 H2 隧道 stream 读取数据（接收服务器推送的 DATA 帧）。
+// Read 从隧道读取数据
 func (t *H2TunnelConn) Read(p []byte) (int, error) {
 	if len(t.readBuf) > 0 {
 		n := copy(p, t.readBuf)
@@ -764,7 +762,7 @@ func (t *H2TunnelConn) Read(p []byte) (int, error) {
 	}
 }
 
-// Write 通过 H2 DATA 帧向隧道 stream 写入数据。
+// Write 向隧道写入数据
 func (t *H2TunnelConn) Write(p []byte) (int, error) {
 	if t.s.closed.Load() {
 		return 0, io.ErrClosedPipe
@@ -799,7 +797,7 @@ func (t *H2TunnelConn) Write(p []byte) (int, error) {
 	return total, nil
 }
 
-// Close 关闭隧道 stream（发送带 EndStream 的空 DATA 帧）。
+// Close 关闭隧道
 func (t *H2TunnelConn) Close() error {
 	t.closeOnce.Do(func() {
 		t.client.writeMu.Lock()
