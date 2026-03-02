@@ -367,10 +367,12 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 		return nil, fmt.Errorf("h2: write headers: %w", err)
 	}
 
-	if hasBody {
-		if err := c.sendBody(streamID, req.Body); err != nil {
-			return nil, fmt.Errorf("h2: write body: %w", err)
-		}
+if hasBody {
+		// 【关键修复】：开启一个 Goroutine 异步发送 Body
+		// 这是实现全双工隧道（不卡死）的核心！
+		go func() {
+			_ = c.sendBody(streamID, req.Body)
+		}()
 	}
 
 	select {
