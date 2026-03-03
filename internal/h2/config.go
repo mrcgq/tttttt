@@ -1,5 +1,3 @@
-
-
 package h2
 
 import (
@@ -25,7 +23,7 @@ type FingerprintConfig struct {
 	PriorityFrames    []PriorityConfig
 	MaxFrameSize      uint32
 
-	// [新增] 是否发送 PRIORITY 帧
+	// 是否发送 PRIORITY 帧
 	SendPriority bool
 }
 
@@ -132,15 +130,10 @@ func ChromeDefaultConfig() FingerprintConfig {
 		SendPriority:      true,
 		// Chrome 的 PRIORITY 帧：建立依赖树
 		PriorityFrames: []PriorityConfig{
-			// Stream 3: exclusive on 0, weight 201
 			{StreamID: 3, Exclusive: true, DependsOn: 0, Weight: 200},
-			// Stream 5: exclusive on 0, weight 101
 			{StreamID: 5, Exclusive: true, DependsOn: 0, Weight: 100},
-			// Stream 7: exclusive on 0, weight 1
 			{StreamID: 7, Exclusive: true, DependsOn: 0, Weight: 0},
-			// Stream 9: exclusive on 7, weight 1
 			{StreamID: 9, Exclusive: true, DependsOn: 7, Weight: 0},
-			// Stream 11: exclusive on 3, weight 1
 			{StreamID: 11, Exclusive: true, DependsOn: 3, Weight: 0},
 		},
 	}
@@ -157,7 +150,7 @@ func FirefoxDefaultConfig() FingerprintConfig {
 		WindowUpdateValue: 12517377,
 		PseudoHeaderOrder: []string{":method", ":path", ":authority", ":scheme"},
 		MaxFrameSize:      16384,
-		SendPriority:      false, // Firefox 使用不同的优先级机制
+		SendPriority:      false,
 	}
 }
 
@@ -175,7 +168,6 @@ func SafariDefaultConfig() FingerprintConfig {
 		PseudoHeaderOrder: []string{":method", ":scheme", ":path", ":authority"},
 		MaxFrameSize:      16384,
 		SendPriority:      true,
-		// Safari 的 PRIORITY 帧
 		PriorityFrames: []PriorityConfig{
 			{StreamID: 3, Exclusive: false, DependsOn: 0, Weight: 255},
 			{StreamID: 5, Exclusive: false, DependsOn: 0, Weight: 255},
@@ -183,11 +175,3 @@ func SafariDefaultConfig() FingerprintConfig {
 		},
 	}
 }
-
-// EdgeDefaultConfig Edge 默认配置（与 Chrome 相同）
-func EdgeDefaultConfig() FingerprintConfig {
-	return ChromeDefaultConfig()
-}
-
-
-
