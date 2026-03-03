@@ -1,3 +1,5 @@
+
+
 package h2
 
 import (
@@ -7,6 +9,7 @@ import (
 	"golang.org/x/net/http2"
 )
 
+// PriorityConfig HTTP/2 PRIORITY 帧配置
 type PriorityConfig struct {
 	StreamID  uint32
 	Exclusive bool
@@ -14,14 +17,19 @@ type PriorityConfig struct {
 	Weight    uint8
 }
 
+// FingerprintConfig HTTP/2 指纹配置
 type FingerprintConfig struct {
 	Settings          []http2.Setting
 	WindowUpdateValue uint32
 	PseudoHeaderOrder []string
 	PriorityFrames    []PriorityConfig
 	MaxFrameSize      uint32
+
+	// [新增] 是否发送 PRIORITY 帧
+	SendPriority bool
 }
 
+// SettingsString 返回 SETTINGS 的字符串表示
 func (c *FingerprintConfig) SettingsString() string {
 	parts := make([]string, 0, len(c.Settings))
 	for _, s := range c.Settings {
@@ -30,10 +38,12 @@ func (c *FingerprintConfig) SettingsString() string {
 	return strings.Join(parts, ";")
 }
 
+// PseudoOrderString 返回伪头顺序的字符串表示
 func (c *FingerprintConfig) PseudoOrderString() string {
 	return strings.Join(c.PseudoHeaderOrder, ",")
 }
 
+// Fingerprint 返回完整指纹字符串
 func (c *FingerprintConfig) Fingerprint() string {
 	return fmt.Sprintf("%s|%d|%s",
 		c.SettingsString(),
@@ -42,6 +52,7 @@ func (c *FingerprintConfig) Fingerprint() string {
 	)
 }
 
+// InitialWindowSize 获取初始窗口大小
 func (c *FingerprintConfig) InitialWindowSize() uint32 {
 	for _, s := range c.Settings {
 		if s.ID == http2.SettingInitialWindowSize {
@@ -51,6 +62,7 @@ func (c *FingerprintConfig) InitialWindowSize() uint32 {
 	return 65535
 }
 
+// GetMaxFrameSize 获取最大帧大小
 func (c *FingerprintConfig) GetMaxFrameSize() uint32 {
 	if c.MaxFrameSize > 0 {
 		return c.MaxFrameSize
@@ -58,6 +70,7 @@ func (c *FingerprintConfig) GetMaxFrameSize() uint32 {
 	return 16384
 }
 
+// Validate 验证配置
 func (c *FingerprintConfig) Validate() error {
 	if len(c.Settings) == 0 {
 		return fmt.Errorf("h2: settings cannot be empty")
@@ -88,6 +101,7 @@ func (c *FingerprintConfig) Validate() error {
 	return nil
 }
 
+// GoDefaultConfig Go 默认配置
 func GoDefaultConfig() FingerprintConfig {
 	return FingerprintConfig{
 		Settings: []http2.Setting{
@@ -98,9 +112,11 @@ func GoDefaultConfig() FingerprintConfig {
 		},
 		WindowUpdateValue: 1073741823,
 		PseudoHeaderOrder: []string{":method", ":path", ":scheme", ":authority"},
+		SendPriority:      false,
 	}
 }
 
+// ChromeDefaultConfig Chrome 126 默认配置（完整版）
 func ChromeDefaultConfig() FingerprintConfig {
 	return FingerprintConfig{
 		Settings: []http2.Setting{
@@ -112,9 +128,25 @@ func ChromeDefaultConfig() FingerprintConfig {
 		},
 		WindowUpdateValue: 15663105,
 		PseudoHeaderOrder: []string{":method", ":authority", ":scheme", ":path"},
+		MaxFrameSize:      16384,
+		SendPriority:      true,
+		// Chrome 的 PRIORITY 帧：建立依赖树
+		PriorityFrames: []PriorityConfig{
+			// Stream 3: exclusive on 0, weight 201
+			{StreamID: 3, Exclusive: true, DependsOn: 0, Weight: 200},
+			// Stream 5: exclusive on 0, weight 101
+			{StreamID: 5, Exclusive: true, DependsOn: 0, Weight: 100},
+			// Stream 7: exclusive on 0, weight 1
+			{StreamID: 7, Exclusive: true, DependsOn: 0, Weight: 0},
+			// Stream 9: exclusive on 7, weight 1
+			{StreamID: 9, Exclusive: true, DependsOn: 7, Weight: 0},
+			// Stream 11: exclusive on 3, weight 1
+			{StreamID: 11, Exclusive: true, DependsOn: 3, Weight: 0},
+		},
 	}
 }
 
+// FirefoxDefaultConfig Firefox 默认配置
 func FirefoxDefaultConfig() FingerprintConfig {
 	return FingerprintConfig{
 		Settings: []http2.Setting{
@@ -124,9 +156,12 @@ func FirefoxDefaultConfig() FingerprintConfig {
 		},
 		WindowUpdateValue: 12517377,
 		PseudoHeaderOrder: []string{":method", ":path", ":authority", ":scheme"},
+		MaxFrameSize:      16384,
+		SendPriority:      false, // Firefox 使用不同的优先级机制
 	}
 }
 
+// SafariDefaultConfig Safari 默认配置
 func SafariDefaultConfig() FingerprintConfig {
 	return FingerprintConfig{
 		Settings: []http2.Setting{
@@ -138,5 +173,21 @@ func SafariDefaultConfig() FingerprintConfig {
 		},
 		WindowUpdateValue: 10420225,
 		PseudoHeaderOrder: []string{":method", ":scheme", ":path", ":authority"},
+		MaxFrameSize:      16384,
+		SendPriority:      true,
+		// Safari 的 PRIORITY 帧
+		PriorityFrames: []PriorityConfig{
+			{StreamID: 3, Exclusive: false, DependsOn: 0, Weight: 255},
+			{StreamID: 5, Exclusive: false, DependsOn: 0, Weight: 255},
+			{StreamID: 7, Exclusive: false, DependsOn: 0, Weight: 255},
+		},
 	}
 }
+
+// EdgeDefaultConfig Edge 默认配置（与 Chrome 相同）
+func EdgeDefaultConfig() FingerprintConfig {
+	return ChromeDefaultConfig()
+}
+
+
+
