@@ -1,4 +1,3 @@
-
 package transport
 
 import (
@@ -99,7 +98,7 @@ func (t *WSTransport) Wrap(conn net.Conn, cfg *Config) (net.Conn, error) {
 
 	ws := newWSConn(conn, br)
 
-	// [核心改造] 发送 Xlink 协议头
+	// 发送 Xlink 协议头
 	if cfg.Target != "" {
 		xlinkHeader := buildXlinkHeader(cfg.Target, cfg.SOCKS5Proxy, cfg.Fallback)
 		if _, err := ws.Write(xlinkHeader); err != nil {
@@ -369,10 +368,3 @@ func (c *wsConn) RemoteAddr() net.Addr               { return c.conn.RemoteAddr(
 func (c *wsConn) SetDeadline(t time.Time) error      { return c.conn.SetDeadline(t) }
 func (c *wsConn) SetReadDeadline(t time.Time) error  { return c.conn.SetReadDeadline(t) }
 func (c *wsConn) SetWriteDeadline(t time.Time) error { return c.conn.SetWriteDeadline(t) }
-
-
-
-
-
-
-
