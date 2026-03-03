@@ -1,3 +1,4 @@
+
 package engine
 
 import (
@@ -6,6 +7,8 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/user/tls-client/internal/h2"
 	"github.com/user/tls-client/pkg/fingerprint"
@@ -32,9 +35,24 @@ type FingerprintTransport struct {
 	// Retry configures retry behavior for TLS dial.
 	Retry *RetryConfig
 
+	// [新增] Cadence 时序控制
+	Cadence *Cadence
+
+	// [新增] Cookie 管理
+	CookieManager *CookieManager
+
+	// [新增] 是否启用自动重定向
+	FollowRedirects bool
+	MaxRedirects    int
+
 	mu        sync.Mutex
 	h2Clients map[string]*h2ClientEntry
 	closed    bool
+
+	// 统计
+	requestCount int64
+	successCount int64
+	failCount    int64
 }
 
 type h2ClientEntry struct {
@@ -42,7 +60,62 @@ type h2ClientEntry struct {
 	profile *fingerprint.BrowserProfile
 }
 
+// NewFingerprintTransport 创建指纹传输层
+func NewFingerprintTransport(selector fingerprint.Selector) *FingerprintTransport {
+	return &FingerprintTransport{
+		Selector:        selector,
+		VerifyMode:      verify.ModeSNISkip,
+		h2Clients:       make(map[string]*h2ClientEntry),
+		MaxRedirects:    10,
+		FollowRedirects: true,
+	}
+}
+
+// WithCadence 设置时序控制
+func (t *FingerprintTransport) WithCadence(cadence *Cadence) *FingerprintTransport {
+	t.Cadence = cadence
+	return t
+}
+
+// WithCookieManager 设置 Cookie 管理
+func (t *FingerprintTransport) WithCookieManager(cm *CookieManager) *FingerprintTransport {
+	t.CookieManager = cm
+	return t
+}
+
+// RoundTrip implements http.RoundTripper
 func (t *FingerprintTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	atomic.AddInt64(&t.requestCount, 1)
+
+	// 时序控制
+	if t.Cadence != nil {
+		t.Cadence.Wait()
+	}
+
+	// 应用 Cookie
+	if t.CookieManager != nil {
+		t.CookieManager.ApplyToRequest(req)
+	}
+
+	// 执行请求
+	resp, err := t.doRoundTrip(req)
+
+	if err != nil {
+		atomic.AddInt64(&t.failCount, 1)
+		return nil, err
+	}
+
+	atomic.AddInt64(&t.successCount, 1)
+
+	// 保存 Cookie
+	if t.CookieManager != nil {
+		t.CookieManager.SaveFromResponse(resp)
+	}
+
+	return resp, nil
+}
+
+func (t *FingerprintTransport) doRoundTrip(req *http.Request) (*http.Response, error) {
 	if req.URL.Scheme != "https" {
 		return nil, fmt.Errorf("engine: only https is supported, got %s", req.URL.Scheme)
 	}
@@ -137,6 +210,12 @@ func (t *FingerprintTransport) roundTripH2(host string, conn net.Conn, profile *
 		return nil, fmt.Errorf("engine: h2 client: %w", err)
 	}
 
+	// 等待 SETTINGS 交换完成
+	if err := client.WaitReady(10 * time.Second); err != nil {
+		client.Close()
+		return nil, fmt.Errorf("engine: h2 ready: %w", err)
+	}
+
 	// Cache the H2 client for connection reuse
 	t.mu.Lock()
 	if t.h2Clients == nil {
@@ -174,3 +253,71 @@ func (t *FingerprintTransport) CloseIdleConnections() {
 		delete(t.h2Clients, host)
 	}
 }
+
+// Stats 返回统计信息
+func (t *FingerprintTransport) Stats() map[string]int64 {
+	return map[string]int64{
+		"requests":  atomic.LoadInt64(&t.requestCount),
+		"successes": atomic.LoadInt64(&t.successCount),
+		"failures":  atomic.LoadInt64(&t.failCount),
+	}
+}
+
+// CreateAntiDetectClient 创建反检测 HTTP 客户端（便捷函数）
+func CreateAntiDetectClient(profileName string, opts ...func(*FingerprintTransport)) *http.Client {
+	profile := fingerprint.Get(profileName)
+	if profile == nil {
+		profile = fingerprint.MustGet(fingerprint.DefaultProfile())
+	}
+
+	selector := &fingerprint.FixedSelector{Profile: profile}
+	transport := NewFingerprintTransport(selector)
+
+	// 应用选项
+	for _, opt := range opts {
+		opt(transport)
+	}
+
+	return &http.Client{
+		Transport: transport,
+		Timeout:   30 * time.Second,
+	}
+}
+
+// WithBrowsingCadence 添加浏览模式时序控制
+func WithBrowsingCadence() func(*FingerprintTransport) {
+	return func(t *FingerprintTransport) {
+		t.Cadence = NewCadence(DefaultBrowsingCadence())
+	}
+}
+
+// WithFastCadence 添加快速模式时序控制
+func WithFastCadence() func(*FingerprintTransport) {
+	return func(t *FingerprintTransport) {
+		t.Cadence = NewCadence(DefaultFastCadence())
+	}
+}
+
+// WithCookies 启用 Cookie 管理
+func WithCookies() func(*FingerprintTransport) {
+	return func(t *FingerprintTransport) {
+		cm, _ := NewCookieManager()
+		t.CookieManager = cm
+	}
+}
+
+// WithDomainFronting 配置域前置
+func WithDomainFronting(targetAddr, sni string) func(*FingerprintTransport) {
+	return func(t *FingerprintTransport) {
+		t.TargetAddr = targetAddr
+		t.SNI = sni
+	}
+}
+
+
+
+
+
+
+
+
