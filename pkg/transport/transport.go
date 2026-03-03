@@ -1,4 +1,3 @@
-
 package transport
 
 import (
@@ -42,7 +41,7 @@ type Config struct {
 	MaxIdleTime int
 	Target      string // 最终目标地址 (host:port)
 
-	// [核心新增] Xlink 借力配置
+	// Xlink 借力配置
 	SOCKS5Proxy string // 远程 Worker 使用的 SOCKS5 代理 (格式: user:pass@host:port)
 	Fallback    string // 远程 Worker 连接失败时的备用地址 (格式: host:port)
 
@@ -60,43 +59,6 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("transport: target must be host:port, got %q", c.Target)
 		}
 	}
-	// 验证 SOCKS5 格式
-	if c.SOCKS5Proxy != "" {
-		if err := validateSOCKS5Format(c.SOCKS5Proxy); err != nil {
-			return fmt.Errorf("transport: invalid socks5_proxy: %w", err)
-		}
-	}
-	// 验证 Fallback 格式
-	if c.Fallback != "" {
-		if !strings.Contains(c.Fallback, ":") {
-			return fmt.Errorf("transport: fallback must be host:port, got %q", c.Fallback)
-		}
-	}
-	return nil
-}
-
-// validateSOCKS5Format 验证 SOCKS5 地址格式
-func validateSOCKS5Format(s string) error {
-	// 支持格式:
-	// - host:port
-	// - user:pass@host:port
-	if s == "" {
-		return nil
-	}
-
-	addr := s
-	if strings.Contains(s, "@") {
-		parts := strings.SplitN(s, "@", 2)
-		if len(parts) != 2 || parts[1] == "" {
-			return fmt.Errorf("invalid format, expected user:pass@host:port")
-		}
-		addr = parts[1]
-	}
-
-	if !strings.Contains(addr, ":") {
-		return fmt.Errorf("missing port in address")
-	}
-
 	return nil
 }
 
@@ -147,5 +109,3 @@ func Get(name string) Transport {
 func Names() []string {
 	return []string{"raw", "ws", "h2"}
 }
-
-
