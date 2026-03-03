@@ -1,3 +1,5 @@
+
+
 package inbound
 
 import (
@@ -15,6 +17,8 @@ import (
 const (
 	socks5Version      = 0x05
 	socks5AuthNone     = 0x00
+	socks5AuthUserPass = 0x02
+	socks5AuthNoAccept = 0xFF
 	socks5CmdConnect   = 0x01
 	socks5CmdBind      = 0x02
 	socks5CmdUDPAssoc  = 0x03
@@ -24,6 +28,8 @@ const (
 	socks5RepSuccess   = 0x00
 	socks5RepFail      = 0x01
 	socks5RepCmdNotSup = 0x07
+
+	userPassVersion = 0x01
 )
 
 // TunnelFunc is called when a CONNECT request is accepted.
@@ -37,6 +43,13 @@ type SOCKS5Stats struct {
 	ActiveConns int64
 	TotalConns  int64
 	TotalErrors int64
+	AuthFails   int64
+}
+
+// SOCKS5AuthConfig 认证配置
+type SOCKS5AuthConfig struct {
+	Username string
+	Password string
 }
 
 // SOCKS5Server implements a SOCKS5 proxy (RFC 1928).
@@ -45,6 +58,7 @@ type SOCKS5Server struct {
 	Logger     *zap.Logger
 	OnConnect  TunnelFunc
 	OnUDP      UDPRelayFunc
+	AuthConfig *SOCKS5AuthConfig
 	listener   net.Listener
 	udpConn    *net.UDPConn
 	wg         sync.WaitGroup
@@ -54,8 +68,10 @@ type SOCKS5Server struct {
 	activeConns int64
 	totalConns  int64
 	totalErrors int64
+	authFails   int64
 }
 
+// NewSOCKS5Server 创建 SOCKS5 服务器
 func NewSOCKS5Server(addr string, logger *zap.Logger, onConnect TunnelFunc) *SOCKS5Server {
 	return &SOCKS5Server{
 		Addr:      addr,
@@ -65,6 +81,19 @@ func NewSOCKS5Server(addr string, logger *zap.Logger, onConnect TunnelFunc) *SOC
 	}
 }
 
+// NewSOCKS5ServerWithAuth 创建带认证的 SOCKS5 服务器
+func NewSOCKS5ServerWithAuth(addr string, logger *zap.Logger, onConnect TunnelFunc, username, password string) *SOCKS5Server {
+	s := NewSOCKS5Server(addr, logger, onConnect)
+	if username != "" {
+		s.AuthConfig = &SOCKS5AuthConfig{
+			Username: username,
+			Password: password,
+		}
+	}
+	return s
+}
+
+// SetUDPHandler 设置 UDP 处理器
 func (s *SOCKS5Server) SetUDPHandler(handler UDPRelayFunc) {
 	s.OnUDP = handler
 }
@@ -75,16 +104,26 @@ func (s *SOCKS5Server) Stats() SOCKS5Stats {
 		ActiveConns: atomic.LoadInt64(&s.activeConns),
 		TotalConns:  atomic.LoadInt64(&s.totalConns),
 		TotalErrors: atomic.LoadInt64(&s.totalErrors),
+		AuthFails:   atomic.LoadInt64(&s.authFails),
 	}
 }
 
+// Start 启动服务器
 func (s *SOCKS5Server) Start() error {
 	ln, err := net.Listen("tcp", s.Addr)
 	if err != nil {
 		return fmt.Errorf("socks5: listen %s: %w", s.Addr, err)
 	}
 	s.listener = ln
-	s.Logger.Info("socks5 server started", zap.String("addr", s.Addr))
+
+	authMode := "none"
+	if s.AuthConfig != nil {
+		authMode = "user/pass"
+	}
+	s.Logger.Info("socks5 server started",
+		zap.String("addr", s.Addr),
+		zap.String("auth", authMode),
+	)
 
 	if s.OnUDP != nil {
 		if err := s.startUDPListener(); err != nil {
@@ -214,6 +253,7 @@ func (s *SOCKS5Server) handleUDP() {
 	}
 }
 
+// Stop 停止服务器
 func (s *SOCKS5Server) Stop() {
 	close(s.closeCh)
 	if s.listener != nil {
@@ -231,6 +271,7 @@ func (s *SOCKS5Server) handleConn(conn net.Conn) {
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
 
+	// 读取版本和认证方法
 	header := make([]byte, 2)
 	if _, err := io.ReadFull(conn, header); err != nil {
 		atomic.AddInt64(&s.totalErrors, 1)
@@ -244,19 +285,25 @@ func (s *SOCKS5Server) handleConn(conn net.Conn) {
 	if _, err := io.ReadFull(conn, methods); err != nil {
 		return
 	}
-	found := false
-	for _, m := range methods {
-		if m == socks5AuthNone {
-			found = true
-			break
-		}
-	}
-	if !found {
-		_, _ = conn.Write([]byte{socks5Version, 0xFF})
+
+	// 选择认证方式
+	selectedAuth := s.selectAuthMethod(methods)
+	if selectedAuth == socks5AuthNoAccept {
+		_, _ = conn.Write([]byte{socks5Version, socks5AuthNoAccept})
 		return
 	}
-	_, _ = conn.Write([]byte{socks5Version, socks5AuthNone})
 
+	_, _ = conn.Write([]byte{socks5Version, selectedAuth})
+
+	// 执行认证
+	if selectedAuth == socks5AuthUserPass {
+		if !s.doUserPassAuth(conn) {
+			atomic.AddInt64(&s.authFails, 1)
+			return
+		}
+	}
+
+	// 读取请求
 	req := make([]byte, 4)
 	if _, err := io.ReadFull(conn, req); err != nil {
 		return
@@ -292,10 +339,79 @@ func (s *SOCKS5Server) handleConn(conn net.Conn) {
 		s.sendReply(conn, socks5RepSuccess, udpAddr)
 		_ = conn.SetDeadline(time.Time{})
 		buf := make([]byte, 1)
-		_, _ = conn.Read(buf) // block until client disconnects
+		_, _ = conn.Read(buf)
 	default:
 		s.sendReply(conn, socks5RepCmdNotSup, nil)
 	}
+}
+
+func (s *SOCKS5Server) selectAuthMethod(methods []byte) byte {
+	needAuth := s.AuthConfig != nil && s.AuthConfig.Username != ""
+
+	for _, m := range methods {
+		if needAuth && m == socks5AuthUserPass {
+			return socks5AuthUserPass
+		}
+		if !needAuth && m == socks5AuthNone {
+			return socks5AuthNone
+		}
+	}
+
+	// 如果需要认证但客户端不支持
+	if needAuth {
+		return socks5AuthNoAccept
+	}
+
+	return socks5AuthNone
+}
+
+func (s *SOCKS5Server) doUserPassAuth(conn net.Conn) bool {
+	// 读取版本
+	ver := make([]byte, 1)
+	if _, err := io.ReadFull(conn, ver); err != nil || ver[0] != userPassVersion {
+		conn.Write([]byte{userPassVersion, 0x01})
+		return false
+	}
+
+	// 读取用户名
+	ulenBuf := make([]byte, 1)
+	if _, err := io.ReadFull(conn, ulenBuf); err != nil {
+		conn.Write([]byte{userPassVersion, 0x01})
+		return false
+	}
+	username := make([]byte, ulenBuf[0])
+	if _, err := io.ReadFull(conn, username); err != nil {
+		conn.Write([]byte{userPassVersion, 0x01})
+		return false
+	}
+
+	// 读取密码
+	plenBuf := make([]byte, 1)
+	if _, err := io.ReadFull(conn, plenBuf); err != nil {
+		conn.Write([]byte{userPassVersion, 0x01})
+		return false
+	}
+	password := make([]byte, plenBuf[0])
+	if _, err := io.ReadFull(conn, password); err != nil {
+		conn.Write([]byte{userPassVersion, 0x01})
+		return false
+	}
+
+	// 验证
+	if s.AuthConfig == nil ||
+		string(username) != s.AuthConfig.Username ||
+		string(password) != s.AuthConfig.Password {
+		s.Logger.Warn("socks5: auth failed",
+			zap.String("username", string(username)),
+			zap.String("remote", conn.RemoteAddr().String()),
+		)
+		conn.Write([]byte{userPassVersion, 0x01})
+		return false
+	}
+
+	s.Logger.Debug("socks5: auth success", zap.String("username", string(username)))
+	conn.Write([]byte{userPassVersion, 0x00})
+	return true
 }
 
 func (s *SOCKS5Server) readAddress(conn net.Conn, atyp byte) (target, domain string, err error) {
@@ -361,3 +477,5 @@ func (s *SOCKS5Server) sendReply(conn net.Conn, rep byte, bindAddr net.Addr) {
 	}
 	_, _ = conn.Write(reply)
 }
+
+
