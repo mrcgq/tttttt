@@ -12,6 +12,7 @@ import (
 )
 
 // PoolConfig configures the connection pool.
+// 【修复遗漏1】这个结构体现在可以从配置文件完全读取
 type PoolConfig struct {
 	MaxIdle     int
 	MaxPerKey   int
@@ -68,7 +69,22 @@ func NewConnPool(maxIdle int, idleTimeout time.Duration) *ConnPool {
 }
 
 // NewConnPoolWithConfig creates a connection pool with full configuration.
+// 【修复遗漏1】这个函数现在被 tunnel.go 使用来读取配置文件中的 pool 参数
 func NewConnPoolWithConfig(cfg PoolConfig) *ConnPool {
+	// 应用默认值
+	if cfg.MaxIdle <= 0 {
+		cfg.MaxIdle = 10
+	}
+	if cfg.MaxPerKey <= 0 {
+		cfg.MaxPerKey = 3
+	}
+	if cfg.IdleTimeout <= 0 {
+		cfg.IdleTimeout = 120 * time.Second
+	}
+	if cfg.MaxLifetime <= 0 {
+		cfg.MaxLifetime = 10 * time.Minute
+	}
+
 	p := &ConnPool{
 		conns: make(map[string][]*poolEntry),
 		cfg:   cfg,
@@ -287,6 +303,11 @@ func (p *ConnPool) Stats() PoolStats {
 		}
 	}
 	return stats
+}
+
+// Config returns the pool configuration
+func (p *ConnPool) Config() PoolConfig {
+	return p.cfg
 }
 
 type pooledConn struct {
