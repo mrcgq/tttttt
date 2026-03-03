@@ -1,4 +1,3 @@
-
 package engine
 
 import (
@@ -13,11 +12,9 @@ import (
 
 // CookieManager 管理 HTTP Cookie
 type CookieManager struct {
-	jar     http.CookieJar
-	mu      sync.RWMutex
-	enabled bool
-
-	// 统计
+	jar           http.CookieJar
+	mu            sync.RWMutex
+	enabled       bool
 	cookiesSet    int64
 	cookiesStored int64
 }
@@ -37,7 +34,7 @@ func NewCookieManager() (*CookieManager, error) {
 	}, nil
 }
 
-// NewCookieManagerSimple 创建简单的 Cookie 管理器（不使用 public suffix）
+// NewCookieManagerSimple 创建简单的 Cookie 管理器
 func NewCookieManagerSimple() *CookieManager {
 	jar, _ := cookiejar.New(nil)
 	return &CookieManager{
@@ -114,7 +111,6 @@ func (cm *CookieManager) Clear() error {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 
-	// 重新创建 jar
 	jar, err := cookiejar.New(&cookiejar.Options{
 		PublicSuffixList: publicsuffix.List,
 	})
@@ -169,5 +165,3 @@ func PersistentCookie(name, value, domain, path string, maxAge time.Duration) *h
 		SameSite: http.SameSiteLaxMode,
 	}
 }
-
-
