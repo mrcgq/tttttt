@@ -1,5 +1,3 @@
-
-
 package inbound
 
 import (
@@ -369,31 +367,31 @@ func (s *SOCKS5Server) doUserPassAuth(conn net.Conn) bool {
 	// 读取版本
 	ver := make([]byte, 1)
 	if _, err := io.ReadFull(conn, ver); err != nil || ver[0] != userPassVersion {
-		conn.Write([]byte{userPassVersion, 0x01})
+		_, _ = conn.Write([]byte{userPassVersion, 0x01})
 		return false
 	}
 
 	// 读取用户名
 	ulenBuf := make([]byte, 1)
 	if _, err := io.ReadFull(conn, ulenBuf); err != nil {
-		conn.Write([]byte{userPassVersion, 0x01})
+		_, _ = conn.Write([]byte{userPassVersion, 0x01})
 		return false
 	}
 	username := make([]byte, ulenBuf[0])
 	if _, err := io.ReadFull(conn, username); err != nil {
-		conn.Write([]byte{userPassVersion, 0x01})
+		_, _ = conn.Write([]byte{userPassVersion, 0x01})
 		return false
 	}
 
 	// 读取密码
 	plenBuf := make([]byte, 1)
 	if _, err := io.ReadFull(conn, plenBuf); err != nil {
-		conn.Write([]byte{userPassVersion, 0x01})
+		_, _ = conn.Write([]byte{userPassVersion, 0x01})
 		return false
 	}
 	password := make([]byte, plenBuf[0])
 	if _, err := io.ReadFull(conn, password); err != nil {
-		conn.Write([]byte{userPassVersion, 0x01})
+		_, _ = conn.Write([]byte{userPassVersion, 0x01})
 		return false
 	}
 
@@ -405,12 +403,12 @@ func (s *SOCKS5Server) doUserPassAuth(conn net.Conn) bool {
 			zap.String("username", string(username)),
 			zap.String("remote", conn.RemoteAddr().String()),
 		)
-		conn.Write([]byte{userPassVersion, 0x01})
+		_, _ = conn.Write([]byte{userPassVersion, 0x01})
 		return false
 	}
 
 	s.Logger.Debug("socks5: auth success", zap.String("username", string(username)))
-	conn.Write([]byte{userPassVersion, 0x00})
+	_, _ = conn.Write([]byte{userPassVersion, 0x00})
 	return true
 }
 
@@ -477,5 +475,3 @@ func (s *SOCKS5Server) sendReply(conn net.Conn, rep byte, bindAddr net.Addr) {
 	}
 	_, _ = conn.Write(reply)
 }
-
-
