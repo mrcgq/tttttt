@@ -1,4 +1,3 @@
-
 package engine
 
 import (
@@ -17,31 +16,20 @@ import (
 
 // FingerprintTransport implements http.RoundTripper with full TLS+H2 fingerprint control.
 type FingerprintTransport struct {
-	// Selector picks a BrowserProfile for each request.
-	Selector fingerprint.Selector
-
-	// VerifyMode controls certificate verification.
+	Selector   fingerprint.Selector
 	VerifyMode verify.Mode
-
-	// VerifyOpts holds additional verification options.
 	VerifyOpts *verify.Options
-
-	// TargetAddr overrides DNS resolution (connect to this IP:Port directly).
 	TargetAddr string
+	SNI        string
+	Retry      *RetryConfig
 
-	// SNI overrides the SNI for all requests (domain fronting).
-	SNI string
-
-	// Retry configures retry behavior for TLS dial.
-	Retry *RetryConfig
-
-	// [新增] Cadence 时序控制
+	// 时序控制
 	Cadence *Cadence
 
-	// [新增] Cookie 管理
+	// Cookie 管理
 	CookieManager *CookieManager
 
-	// [新增] 是否启用自动重定向
+	// 重定向配置
 	FollowRedirects bool
 	MaxRedirects    int
 
@@ -49,7 +37,6 @@ type FingerprintTransport struct {
 	h2Clients map[string]*h2ClientEntry
 	closed    bool
 
-	// 统计
 	requestCount int64
 	successCount int64
 	failCount    int64
@@ -87,17 +74,14 @@ func (t *FingerprintTransport) WithCookieManager(cm *CookieManager) *Fingerprint
 func (t *FingerprintTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	atomic.AddInt64(&t.requestCount, 1)
 
-	// 时序控制
 	if t.Cadence != nil {
 		t.Cadence.Wait()
 	}
 
-	// 应用 Cookie
 	if t.CookieManager != nil {
 		t.CookieManager.ApplyToRequest(req)
 	}
 
-	// 执行请求
 	resp, err := t.doRoundTrip(req)
 
 	if err != nil {
@@ -107,7 +91,6 @@ func (t *FingerprintTransport) RoundTrip(req *http.Request) (*http.Response, err
 
 	atomic.AddInt64(&t.successCount, 1)
 
-	// 保存 Cookie
 	if t.CookieManager != nil {
 		t.CookieManager.SaveFromResponse(resp)
 	}
@@ -126,7 +109,6 @@ func (t *FingerprintTransport) doRoundTrip(req *http.Request) (*http.Response, e
 		return nil, fmt.Errorf("engine: no profile selected for %s", host)
 	}
 
-	// Determine actual connection target
 	addr := t.TargetAddr
 	if addr == "" {
 		addr = host
@@ -140,7 +122,6 @@ func (t *FingerprintTransport) doRoundTrip(req *http.Request) (*http.Response, e
 		sni = req.URL.Hostname()
 	}
 
-	// Set User-Agent from profile if not already set
 	if req.Header.Get("User-Agent") == "" {
 		if req.Header == nil {
 			req.Header = make(http.Header)
@@ -148,17 +129,14 @@ func (t *FingerprintTransport) doRoundTrip(req *http.Request) (*http.Response, e
 		req.Header.Set("User-Agent", profile.UserAgent)
 	}
 
-	// Try cached H2 client first
 	if client := t.getCachedH2Client(host); client != nil {
 		resp, err := client.Do(req)
 		if err == nil {
 			return resp, nil
 		}
-		// Client failed, remove from cache and establish new connection
 		t.removeCachedH2Client(host)
 	}
 
-	// Dial TLS
 	result, err := Dial(req.Context(), &DialConfig{
 		Address:    addr,
 		SNI:        sni,
@@ -210,13 +188,11 @@ func (t *FingerprintTransport) roundTripH2(host string, conn net.Conn, profile *
 		return nil, fmt.Errorf("engine: h2 client: %w", err)
 	}
 
-	// 等待 SETTINGS 交换完成
 	if err := client.WaitReady(10 * time.Second); err != nil {
 		client.Close()
 		return nil, fmt.Errorf("engine: h2 ready: %w", err)
 	}
 
-	// Cache the H2 client for connection reuse
 	t.mu.Lock()
 	if t.h2Clients == nil {
 		t.h2Clients = make(map[string]*h2ClientEntry)
@@ -263,7 +239,7 @@ func (t *FingerprintTransport) Stats() map[string]int64 {
 	}
 }
 
-// CreateAntiDetectClient 创建反检测 HTTP 客户端（便捷函数）
+// CreateAntiDetectClient 创建反检测 HTTP 客户端
 func CreateAntiDetectClient(profileName string, opts ...func(*FingerprintTransport)) *http.Client {
 	profile := fingerprint.Get(profileName)
 	if profile == nil {
@@ -273,7 +249,6 @@ func CreateAntiDetectClient(profileName string, opts ...func(*FingerprintTranspo
 	selector := &fingerprint.FixedSelector{Profile: profile}
 	transport := NewFingerprintTransport(selector)
 
-	// 应用选项
 	for _, opt := range opts {
 		opt(transport)
 	}
@@ -313,11 +288,3 @@ func WithDomainFronting(targetAddr, sni string) func(*FingerprintTransport) {
 		t.SNI = sni
 	}
 }
-
-
-
-
-
-
-
-
