@@ -1,4 +1,3 @@
-
 package config
 
 // Config 是主配置结构
@@ -75,7 +74,7 @@ type NodeConfig struct {
 	Retry         RetryOpts     `yaml:"retry"`
 	Pool          PoolOpts      `yaml:"pool"`
 
-	// [核心新增] 远程代理配置 (Xlink 借力机制)
+	// 远程代理配置 (Xlink 借力机制)
 	RemoteProxy RemoteProxyConfig `yaml:"remote_proxy"`
 }
 
@@ -106,7 +105,6 @@ type PoolOpts struct {
 }
 
 // RemoteProxyConfig 远程代理配置 (Xlink 借力机制)
-// 这些配置会被发送到远程 Worker，告诉 Worker 如何建立出站连接
 type RemoteProxyConfig struct {
 	// SOCKS5 代理地址，Worker 会通过此代理连接目标
 	// 格式: user:pass@host:port 或 host:port
@@ -131,5 +129,3 @@ func (c *NodeConfig) GetSOCKS5Proxy() string {
 func (c *NodeConfig) GetFallback() string {
 	return c.RemoteProxy.Fallback
 }
-
-
