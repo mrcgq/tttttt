@@ -1,3 +1,4 @@
+
 package h2
 
 import (
@@ -819,3 +820,23 @@ func (t *H2TunnelConn) RemoteAddr() net.Addr               { return t.remoteAddr
 func (t *H2TunnelConn) SetDeadline(d time.Time) error      { return t.client.conn.SetDeadline(d) }
 func (t *H2TunnelConn) SetReadDeadline(d time.Time) error  { return t.client.conn.SetReadDeadline(d) }
 func (t *H2TunnelConn) SetWriteDeadline(d time.Time) error { return t.client.conn.SetWriteDeadline(d) }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
