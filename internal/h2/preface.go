@@ -1,4 +1,3 @@
-
 package h2
 
 import (
@@ -22,7 +21,7 @@ const (
 	frameTypeContinuation = 0x09
 )
 
-// BuildPreface 构建 HTTP/2 连接前言（包含完整的 Chrome 指纹）
+// BuildPreface 构建 HTTP/2 连接前言
 func BuildPreface(cfg *FingerprintConfig) []byte {
 	var buf bytes.Buffer
 
@@ -44,7 +43,7 @@ func BuildPreface(cfg *FingerprintConfig) []byte {
 		writeFrame(&buf, frameTypeWindowUpdate, 0x00, 0, wuPayload)
 	}
 
-	// 4. [关键] 发送 PRIORITY 帧（Chrome 指纹核心）
+	// 4. 发送 PRIORITY 帧（Chrome 指纹核心）
 	if cfg.SendPriority && len(cfg.PriorityFrames) > 0 {
 		for _, pf := range cfg.PriorityFrames {
 			priPayload := BuildPriorityPayload(pf)
@@ -56,52 +55,39 @@ func BuildPreface(cfg *FingerprintConfig) []byte {
 }
 
 // BuildPriorityPayload 构建 PRIORITY 帧的 payload
-// 格式: [E|Stream Dependency (31 bits)][Weight (8 bits)]
 func BuildPriorityPayload(pf PriorityConfig) []byte {
 	payload := make([]byte, 5)
 
-	// Stream Dependency (31 bits) + Exclusive flag (1 bit)
 	dep := pf.DependsOn
 	if pf.Exclusive {
-		dep |= 0x80000000 // 设置最高位为 1 表示 Exclusive
+		dep |= 0x80000000
 	}
 	binary.BigEndian.PutUint32(payload[0:4], dep)
-
-	// Weight (8 bits) - 实际权重为 Weight + 1 (1-256)
 	payload[4] = pf.Weight
 
 	return payload
 }
 
 // writeFrame 写入 HTTP/2 帧
-// 帧格式: Length (3) + Type (1) + Flags (1) + Stream ID (4) + Payload
 func writeFrame(buf *bytes.Buffer, frameType byte, flags byte, streamID uint32, payload []byte) {
 	length := len(payload)
 
-	// Length (24 bits, big endian)
 	buf.WriteByte(byte(length >> 16))
 	buf.WriteByte(byte(length >> 8))
 	buf.WriteByte(byte(length))
-
-	// Type (8 bits)
 	buf.WriteByte(frameType)
-
-	// Flags (8 bits)
 	buf.WriteByte(flags)
 
-	// Stream ID (32 bits, 最高位保留为 0)
 	var sid [4]byte
 	binary.BigEndian.PutUint32(sid[:], streamID&0x7fffffff)
 	buf.Write(sid[:])
-
-	// Payload
 	buf.Write(payload)
 }
 
 // BuildSettingsAckFrame 构建 SETTINGS ACK 帧
 func BuildSettingsAckFrame() []byte {
 	var buf bytes.Buffer
-	writeFrame(&buf, frameTypeSettings, 0x01, 0, nil) // flags=0x01 表示 ACK
+	writeFrame(&buf, frameTypeSettings, 0x01, 0, nil)
 	return buf.Bytes()
 }
 
@@ -137,5 +123,3 @@ func BuildGoAwayFrame(lastStreamID uint32, errorCode uint32, debugData []byte) [
 	writeFrame(&buf, frameTypeGoAway, 0x00, 0, payload)
 	return buf.Bytes()
 }
-
-
