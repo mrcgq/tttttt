@@ -1,4 +1,3 @@
-
 package outbound
 
 import (
@@ -33,9 +32,9 @@ type NodeConfig struct {
 	Fallback     *transport.FallbackTransport
 	Retry        *engine.RetryConfig
 
-	// [核心新增] 远程代理配置
-	RemoteSOCKS5 string // 发送给 Worker 的 SOCKS5 代理
-	RemoteFallback string // 发送给 Worker 的 Fallback 地址
+	// 远程代理配置 (Xlink 借力机制)
+	RemoteSOCKS5   string
+	RemoteFallback string
 }
 
 // NewNodeConfig 从配置创建节点
@@ -79,7 +78,7 @@ func NewNodeConfig(
 		TransportCfg: tcfg,
 	}
 
-	// [核心新增] 设置远程代理配置
+	// 设置远程代理配置
 	nc.RemoteSOCKS5 = nodeCfg.RemoteProxy.SOCKS5
 	nc.RemoteFallback = nodeCfg.RemoteProxy.Fallback
 
@@ -195,13 +194,13 @@ func (t *TunnelManager) HandleConnect(clientConn net.Conn, target, domain string
 			zap.String("target", target),
 		)
 
-		// [核心改造] 克隆配置并注入 Xlink 借力参数
+		// 克隆配置并注入 Xlink 借力参数
 		transportCfg := t.Node.TransportCfg.Clone()
 		transportCfg.Target = target
 		transportCfg.SOCKS5Proxy = t.Node.RemoteSOCKS5
 		transportCfg.Fallback = t.Node.RemoteFallback
 
-		// 传输层包装（ws.go 内部会发送 Xlink 协议头）
+		// 传输层包装
 		stream, err = activeTransport.Wrap(tlsConn, transportCfg)
 		if err != nil {
 			tlsConn.Close()
@@ -355,6 +354,3 @@ func (t *TunnelManager) Close() {
 		t.Pool.Close()
 	}
 }
-
-
-
