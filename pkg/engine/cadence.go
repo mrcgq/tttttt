@@ -1,4 +1,3 @@
-
 package engine
 
 import (
@@ -11,37 +10,27 @@ import (
 type CadenceMode string
 
 const (
-	CadenceModeNone       CadenceMode = "none"       // 无延迟
-	CadenceModeBrowsing   CadenceMode = "browsing"   // 浏览模式 (1-5秒)
-	CadenceModeFast       CadenceMode = "fast"       // 快速模式 (100-500ms)
-	CadenceModeAggressive CadenceMode = "aggressive" // 激进模式 (0-100ms)
-	CadenceModeCustom     CadenceMode = "custom"     // 自定义序列
-	CadenceModeRandom     CadenceMode = "random"     // 完全随机
+	CadenceModeNone       CadenceMode = "none"
+	CadenceModeBrowsing   CadenceMode = "browsing"
+	CadenceModeFast       CadenceMode = "fast"
+	CadenceModeAggressive CadenceMode = "aggressive"
+	CadenceModeCustom     CadenceMode = "custom"
+	CadenceModeRandom     CadenceMode = "random"
 )
 
 // CadenceConfig 时序指纹配置
 type CadenceConfig struct {
-	// 模式
-	Mode CadenceMode
-
-	// 自定义延迟范围
+	Mode     CadenceMode
 	MinDelay time.Duration
 	MaxDelay time.Duration
-
-	// 自定义序列 (Mode=Custom 时使用)
 	Sequence []time.Duration
-
-	// 随机抖动比例 (0-1)
-	Jitter float64
-
-	// 是否启用
-	Enabled bool
+	Jitter   float64
+	Enabled  bool
 }
 
 // Cadence 时序控制器
 type Cadence struct {
-	config CadenceConfig
-
+	config          CadenceConfig
 	mu              sync.Mutex
 	lastRequestTime time.Time
 	sequenceIndex   int
@@ -91,7 +80,6 @@ func (c *Cadence) Wait() {
 	c.mu.Unlock()
 }
 
-// calculateDelay 计算延迟时间
 func (c *Cadence) calculateDelay() time.Duration {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -101,33 +89,25 @@ func (c *Cadence) calculateDelay() time.Duration {
 	switch c.config.Mode {
 	case CadenceModeNone:
 		return 0
-
 	case CadenceModeBrowsing:
 		baseDelay = c.randomDuration(1*time.Second, 5*time.Second)
-
 	case CadenceModeFast:
 		baseDelay = c.randomDuration(100*time.Millisecond, 500*time.Millisecond)
-
 	case CadenceModeAggressive:
 		baseDelay = c.randomDuration(0, 100*time.Millisecond)
-
 	case CadenceModeRandom:
-		// 完全随机：0-10秒
 		baseDelay = c.randomDuration(0, 10*time.Second)
-
 	case CadenceModeCustom:
 		if len(c.config.Sequence) > 0 {
 			baseDelay = c.config.Sequence[c.sequenceIndex%len(c.config.Sequence)]
 			c.sequenceIndex++
 		}
-
 	default:
 		if c.config.MinDelay > 0 || c.config.MaxDelay > 0 {
 			baseDelay = c.randomDuration(c.config.MinDelay, c.config.MaxDelay)
 		}
 	}
 
-	// 添加抖动
 	if c.config.Jitter > 0 && baseDelay > 0 {
 		jitter := time.Duration(float64(baseDelay) * c.config.Jitter * (c.rng.Float64()*2 - 1))
 		baseDelay += jitter
@@ -139,7 +119,6 @@ func (c *Cadence) calculateDelay() time.Duration {
 	return baseDelay
 }
 
-// randomDuration 生成指定范围内的随机时长
 func (c *Cadence) randomDuration(min, max time.Duration) time.Duration {
 	if max <= min {
 		return min
@@ -197,5 +176,3 @@ func NoCadence() CadenceConfig {
 		Enabled: false,
 	}
 }
-
-
