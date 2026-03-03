@@ -164,7 +164,12 @@ func runProxy(cmd *cobra.Command, args []string) error {
 		if err := apiServer.Start(); err != nil {
 			logger.Error("failed to start api server", zap.Error(err))
 		} else {
-			defer apiServer.Stop()
+			// 修改这里：用一个匿名函数包装 Stop()，显式检查并记录错误
+			defer func() {
+				if err := apiServer.Stop(); err != nil {
+					logger.Error("api server stop error", zap.Error(err))
+				}
+			}() // 注意：匿名函数需要立即调用 '()'
 			logger.Info("api server started",
 				zap.String("listen", cfg.API.Listen),
 				zap.Bool("auth_enabled", cfg.API.Token != ""),
