@@ -1,10 +1,13 @@
+
 package transport
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/rand"
 	"crypto/sha1"
 	"encoding/base64"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"net"
@@ -52,16 +55,23 @@ func (t *WSTransport) Wrap(conn net.Conn, cfg *Config) (net.Conn, error) {
 	}
 	wsKey := base64.StdEncoding.EncodeToString(keyBytes)
 
+	// 构建干净的 WebSocket 升级请求
 	reqStr := fmt.Sprintf("GET %s HTTP/1.1\r\n", path)
 	reqStr += fmt.Sprintf("Host: %s\r\n", host)
 	reqStr += "Upgrade: websocket\r\n"
 	reqStr += "Connection: Upgrade\r\n"
 	reqStr += fmt.Sprintf("Sec-WebSocket-Key: %s\r\n", wsKey)
 	reqStr += "Sec-WebSocket-Version: 13\r\n"
+
+	// User-Agent 只在非空时发送
 	if cfg.UserAgent != "" {
 		reqStr += fmt.Sprintf("User-Agent: %s\r\n", cfg.UserAgent)
 	}
+
+	// Origin 头帮助绕过某些 CORS 检查
 	reqStr += fmt.Sprintf("Origin: https://%s\r\n", host)
+
+	// 额外的自定义头部
 	for k, v := range cfg.Headers {
 		reqStr += fmt.Sprintf("%s: %s\r\n", k, v)
 	}
@@ -88,9 +98,83 @@ func (t *WSTransport) Wrap(conn net.Conn, cfg *Config) (net.Conn, error) {
 	}
 
 	ws := newWSConn(conn, br)
+
+	// [核心改造] 发送 Xlink 协议头
+	if cfg.Target != "" {
+		xlinkHeader := buildXlinkHeader(cfg.Target, cfg.SOCKS5Proxy, cfg.Fallback)
+		if _, err := ws.Write(xlinkHeader); err != nil {
+			ws.Close()
+			return nil, fmt.Errorf("ws: send xlink header: %w", err)
+		}
+	}
+
 	go ws.keepAlive()
 
 	return ws, nil
+}
+
+// buildXlinkHeader 构建 Xlink 协议头
+// 格式: [HostLen:1][Host:N][Port:2][S5Len:1][S5:M][FBLen:1][FB:K]
+func buildXlinkHeader(target, socks5, fallback string) []byte {
+	host, portStr, err := net.SplitHostPort(target)
+	if err != nil {
+		host = target
+		portStr = "443"
+	}
+
+	port := 443
+	if p, err := parsePort(portStr); err == nil {
+		port = p
+	}
+
+	hostBytes := []byte(host)
+	s5Bytes := []byte(socks5)
+	fbBytes := []byte(fallback)
+
+	// 长度限制检查
+	if len(hostBytes) > 255 {
+		hostBytes = hostBytes[:255]
+	}
+	if len(s5Bytes) > 255 {
+		s5Bytes = s5Bytes[:255]
+	}
+	if len(fbBytes) > 255 {
+		fbBytes = fbBytes[:255]
+	}
+
+	buf := new(bytes.Buffer)
+
+	// [HostLen:1][Host:N]
+	buf.WriteByte(byte(len(hostBytes)))
+	buf.Write(hostBytes)
+
+	// [Port:2] - Big Endian
+	portBytes := make([]byte, 2)
+	binary.BigEndian.PutUint16(portBytes, uint16(port))
+	buf.Write(portBytes)
+
+	// [S5Len:1][S5:M]
+	buf.WriteByte(byte(len(s5Bytes)))
+	if len(s5Bytes) > 0 {
+		buf.Write(s5Bytes)
+	}
+
+	// [FBLen:1][FB:K]
+	buf.WriteByte(byte(len(fbBytes)))
+	if len(fbBytes) > 0 {
+		buf.Write(fbBytes)
+	}
+
+	return buf.Bytes()
+}
+
+func parsePort(s string) (int, error) {
+	var port int
+	_, err := fmt.Sscanf(s, "%d", &port)
+	if err != nil || port < 1 || port > 65535 {
+		return 443, fmt.Errorf("invalid port: %s", s)
+	}
+	return port, nil
 }
 
 func computeAcceptKey(key string) string {
@@ -168,7 +252,7 @@ func (c *wsConn) Read(p []byte) (int, error) {
 		}
 
 		switch opcode {
-		case 0x00:
+		case 0x00: // continuation
 			if c.fragmenting {
 				c.fragmentBuf = append(c.fragmentBuf, payload...)
 				if fin {
@@ -182,27 +266,27 @@ func (c *wsConn) Read(p []byte) (int, error) {
 				continue
 			}
 
-		case 0x01, 0x02:
+		case 0x01, 0x02: // text, binary
 			if !fin {
 				c.fragmenting = true
 				c.fragmentBuf = append([]byte(nil), payload...)
 				continue
 			}
 
-		case 0x08:
+		case 0x08: // close
 			c.readEOF = true
 			c.writeMu.Lock()
 			_, _ = WriteCloseFrame(c.conn, 1000)
 			c.writeMu.Unlock()
 			return 0, io.EOF
 
-		case 0x09:
+		case 0x09: // ping
 			c.writeMu.Lock()
 			_, _ = writeFrame(c.conn, 0x0A, payload)
 			c.writeMu.Unlock()
 			continue
 
-		case 0x0A:
+		case 0x0A: // pong
 			c.lastPong.Store(time.Now().UnixNano())
 			continue
 
@@ -245,13 +329,13 @@ func (c *wsConn) Write(p []byte) (int, error) {
 		var fin bool
 
 		if isFirstFrame && isLastFrame {
-			opcode = 0x02
+			opcode = 0x02 // binary
 			fin = true
 		} else if isFirstFrame && !isLastFrame {
 			opcode = 0x02
 			fin = false
 		} else if !isFirstFrame && isLastFrame {
-			opcode = 0x00
+			opcode = 0x00 // continuation
 			fin = true
 		} else {
 			opcode = 0x00
@@ -285,3 +369,10 @@ func (c *wsConn) RemoteAddr() net.Addr               { return c.conn.RemoteAddr(
 func (c *wsConn) SetDeadline(t time.Time) error      { return c.conn.SetDeadline(t) }
 func (c *wsConn) SetReadDeadline(t time.Time) error  { return c.conn.SetReadDeadline(t) }
 func (c *wsConn) SetWriteDeadline(t time.Time) error { return c.conn.SetWriteDeadline(t) }
+
+
+
+
+
+
+
