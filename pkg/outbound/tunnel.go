@@ -32,6 +32,9 @@ type NodeConfig struct {
 	Fallback     *transport.FallbackTransport
 	Retry        *engine.RetryConfig
 
+	// 【修复遗漏1】连接池配置
+	PoolConfig *engine.PoolConfig
+
 	// 远程代理配置 (Xlink 借力机制)
 	RemoteSOCKS5   string
 	RemoteFallback string
@@ -44,13 +47,28 @@ func NewNodeConfig(
 	vmode verify.Mode,
 	logger *zap.Logger,
 ) *NodeConfig {
-	t := transport.Get(nodeCfg.Transport)
+	// 【修复硬伤1】支持 socks5-out 传输层
+	var t transport.Transport
+	if nodeCfg.Transport == "socks5-out" || nodeCfg.Transport == "socks5out" {
+		t = transport.GetWithConfig(
+			nodeCfg.Transport,
+			nodeCfg.TransportOpts.SOCKS5Addr,
+			nodeCfg.TransportOpts.SOCKS5Username,
+			nodeCfg.TransportOpts.SOCKS5Password,
+		)
+	} else {
+		t = transport.Get(nodeCfg.Transport)
+	}
 
 	tcfg := &transport.Config{
 		Path:      nodeCfg.TransportOpts.WSPath,
 		Host:      nodeCfg.TransportOpts.WSHost,
 		UserAgent: profile.UserAgent,
 		Headers:   nodeCfg.TransportOpts.WSHeaders,
+		// 【修复硬伤1】传递 SOCKS5-Out 配置
+		SOCKS5OutAddr:     nodeCfg.TransportOpts.SOCKS5Addr,
+		SOCKS5OutUsername: nodeCfg.TransportOpts.SOCKS5Username,
+		SOCKS5OutPassword: nodeCfg.TransportOpts.SOCKS5Password,
 	}
 
 	// H2 和 WS 模式统一使用相同的配置
@@ -82,10 +100,22 @@ func NewNodeConfig(
 	nc.RemoteSOCKS5 = nodeCfg.RemoteProxy.SOCKS5
 	nc.RemoteFallback = nodeCfg.RemoteProxy.Fallback
 
+	// 【修复硬伤3】设置重试配置，包含 Jitter
 	if nodeCfg.Retry.MaxAttempts > 1 {
 		nc.Retry = &engine.RetryConfig{
 			MaxAttempts: nodeCfg.Retry.MaxAttempts,
+			BaseDelay:   nodeCfg.Retry.ParseBaseDelay(),
+			MaxDelay:    nodeCfg.Retry.ParseMaxDelay(),
+			Jitter:      nodeCfg.Retry.GetJitter(), // 【新增】使用配置的 Jitter
 		}
+	}
+
+	// 【修复遗漏1】设置连接池配置，从配置文件读取而非硬编码
+	nc.PoolConfig = &engine.PoolConfig{
+		MaxIdle:     nodeCfg.Pool.GetMaxIdle(),
+		MaxPerKey:   nodeCfg.Pool.GetMaxPerKey(),
+		IdleTimeout: nodeCfg.Pool.ParseIdleTimeout(),
+		MaxLifetime: nodeCfg.Pool.ParseMaxLifetime(),
 	}
 
 	if len(nodeCfg.Fallback) > 0 {
@@ -103,21 +133,54 @@ type TunnelStats struct {
 	TotalErrors int64
 }
 
+// ProxyIPSelector ProxyIP选择器接口（用于遗漏3的集成）
+type ProxyIPSelector interface {
+	Select() *ProxyIPEntry
+	MarkFailed(address string)
+	MarkSuccess(address string)
+}
+
+// ProxyIPEntry ProxyIP条目
+type ProxyIPEntry struct {
+	Address string
+	SNI     string
+}
+
 // TunnelManager 隧道管理器
 type TunnelManager struct {
-	Node   *NodeConfig
-	Logger *zap.Logger
-	Pool   *engine.ConnPool
-	stats  TunnelStats
+	Node            *NodeConfig
+	Logger          *zap.Logger
+	Pool            *engine.ConnPool
+	ProxyIPSelector ProxyIPSelector // 【修复遗漏3】ProxyIP选择器
+	stats           TunnelStats
 }
 
 // NewTunnelManager 创建隧道管理器
+// 【修复遗漏1】使用配置文件中的 pool 参数
 func NewTunnelManager(node *NodeConfig, logger *zap.Logger) *TunnelManager {
+	var pool *engine.ConnPool
+
+	// 使用节点配置的连接池参数
+	if node.PoolConfig != nil {
+		pool = engine.NewConnPoolWithConfig(*node.PoolConfig)
+	} else {
+		// 兜底：使用默认配置
+		pool = engine.NewConnPool(10, 90*time.Second)
+	}
+
 	return &TunnelManager{
 		Node:   node,
 		Logger: logger,
-		Pool:   engine.NewConnPool(10, 90*time.Second),
+		Pool:   pool,
 	}
+}
+
+// NewTunnelManagerWithProxyIP 创建带 ProxyIP 支持的隧道管理器
+// 【修复遗漏3】集成 ProxyIP 管理器
+func NewTunnelManagerWithProxyIP(node *NodeConfig, logger *zap.Logger, selector ProxyIPSelector) *TunnelManager {
+	tm := NewTunnelManager(node, logger)
+	tm.ProxyIPSelector = selector
+	return tm
 }
 
 // Stats 获取统计信息
@@ -141,8 +204,23 @@ func (t *TunnelManager) HandleConnect(clientConn net.Conn, target, domain string
 		zap.String("domain", domain),
 	)
 
+	// 【修复遗漏3】如果配置了 ProxyIP 选择器，使用动态选择的地址
 	nodeAddr := t.Node.Address
 	nodeSNI := t.Node.SNI
+
+	if t.ProxyIPSelector != nil {
+		entry := t.ProxyIPSelector.Select()
+		if entry != nil {
+			nodeAddr = entry.Address
+			if entry.SNI != "" {
+				nodeSNI = entry.SNI
+			}
+			t.Logger.Debug("tunnel: using selected proxy ip",
+				zap.String("address", nodeAddr),
+				zap.String("sni", nodeSNI),
+			)
+		}
+	}
 
 	var stream net.Conn
 	var activeTransport transport.Transport
@@ -158,6 +236,7 @@ func (t *TunnelManager) HandleConnect(clientConn net.Conn, target, domain string
 		)
 		if err != nil {
 			atomic.AddInt64(&t.stats.TotalErrors, 1)
+			t.markProxyIPFailed(nodeAddr)
 			t.Logger.Error("tunnel: all transports failed",
 				zap.String("node", t.Node.Name),
 				zap.String("target", target),
@@ -182,6 +261,7 @@ func (t *TunnelManager) HandleConnect(clientConn net.Conn, target, domain string
 		tlsConn, dialErr := t.dialDirect(nodeAddr, nodeSNI, alpn)
 		if dialErr != nil {
 			atomic.AddInt64(&t.stats.TotalErrors, 1)
+			t.markProxyIPFailed(nodeAddr)
 			t.Logger.Error("tunnel: dial failed",
 				zap.String("node", t.Node.Name),
 				zap.Error(dialErr),
@@ -205,6 +285,7 @@ func (t *TunnelManager) HandleConnect(clientConn net.Conn, target, domain string
 		if err != nil {
 			tlsConn.Close()
 			atomic.AddInt64(&t.stats.TotalErrors, 1)
+			t.markProxyIPFailed(nodeAddr)
 			t.Logger.Error("tunnel: transport wrap failed",
 				zap.String("node", t.Node.Name),
 				zap.String("transport", transportName),
@@ -221,6 +302,9 @@ func (t *TunnelManager) HandleConnect(clientConn net.Conn, target, domain string
 	}
 	defer stream.Close()
 
+	// 标记 ProxyIP 成功
+	t.markProxyIPSuccess(nodeAddr)
+
 	transportName := activeTransport.Name()
 
 	// 日志记录
@@ -234,6 +318,11 @@ func (t *TunnelManager) HandleConnect(clientConn net.Conn, target, domain string
 	case "h2":
 		t.Logger.Debug("tunnel: h2 tunnel established (via ws)",
 			zap.String("target", target),
+		)
+	case "socks5-out":
+		t.Logger.Debug("tunnel: socks5-out tunnel established",
+			zap.String("target", target),
+			zap.String("proxy", t.Node.TransportCfg.SOCKS5OutAddr),
 		)
 	case "raw":
 		if err := t.sendHTTPConnect(stream, target); err != nil {
@@ -256,6 +345,20 @@ func (t *TunnelManager) HandleConnect(clientConn net.Conn, target, domain string
 		zap.String("target", target),
 		zap.Int64("bytes", n),
 	)
+}
+
+// markProxyIPFailed 标记 ProxyIP 失败
+func (t *TunnelManager) markProxyIPFailed(address string) {
+	if t.ProxyIPSelector != nil {
+		t.ProxyIPSelector.MarkFailed(address)
+	}
+}
+
+// markProxyIPSuccess 标记 ProxyIP 成功
+func (t *TunnelManager) markProxyIPSuccess(address string) {
+	if t.ProxyIPSelector != nil {
+		t.ProxyIPSelector.MarkSuccess(address)
+	}
 }
 
 func (t *TunnelManager) dialDirect(address, sni string, alpn []string) (net.Conn, error) {
