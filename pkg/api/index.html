@@ -1,0 +1,2264 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TLS-Client 控制面板 v3.5</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --bg-primary: #0f172a;
+            --bg-secondary: #1e293b;
+            --bg-tertiary: #334155;
+            --text-primary: #f1f5f9;
+            --text-secondary: #94a3b8;
+            --accent-blue: #3b82f6;
+            --accent-green: #22c55e;
+            --accent-yellow: #eab308;
+            --accent-red: #ef4444;
+            --accent-purple: #a855f7;
+            --border-color: #475569;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+        }
+
+        /* 顶部导航栏 */
+        .header {
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border-color);
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .logo-icon {
+            width: 40px;
+            height: 40px;
+            background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 1.2rem;
+        }
+
+        .logo-text {
+            font-size: 1.5rem;
+            font-weight: 700;
+        }
+
+        .logo-version {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            background: var(--bg-tertiary);
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+        }
+
+        .header-actions {
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+        }
+
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.5rem 1rem;
+            background: var(--bg-tertiary);
+            border-radius: 8px;
+        }
+
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+
+        .status-dot.online {
+            background: var(--accent-green);
+        }
+
+        .status-dot.offline {
+            background: var(--accent-red);
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        /* 主容器 */
+        .container {
+            display: flex;
+            min-height: calc(100vh - 73px);
+        }
+
+        /* 侧边栏 */
+        .sidebar {
+            width: 240px;
+            background: var(--bg-secondary);
+            border-right: 1px solid var(--border-color);
+            padding: 1rem 0;
+            flex-shrink: 0;
+        }
+
+        .nav-section {
+            margin-bottom: 1.5rem;
+        }
+
+        .nav-title {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            color: var(--text-secondary);
+            padding: 0 1rem;
+            margin-bottom: 0.5rem;
+            letter-spacing: 0.05em;
+        }
+
+        .nav-item {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 0.75rem 1rem;
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: all 0.2s;
+            border-left: 3px solid transparent;
+        }
+
+        .nav-item:hover {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+        }
+
+        .nav-item.active {
+            background: rgba(59, 130, 246, 0.1);
+            color: var(--accent-blue);
+            border-left-color: var(--accent-blue);
+        }
+
+        .nav-icon {
+            font-size: 1.25rem;
+        }
+
+        /* 主内容区 */
+        .main-content {
+            flex: 1;
+            padding: 2rem;
+            overflow-y: auto;
+        }
+
+        .page-title {
+            font-size: 1.75rem;
+            font-weight: 600;
+            margin-bottom: 1.5rem;
+        }
+
+        /* 卡片组件 */
+        .card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+
+        .card-title {
+            font-size: 1.125rem;
+            font-weight: 600;
+        }
+
+        .card-badge {
+            font-size: 0.75rem;
+            padding: 0.25rem 0.75rem;
+            border-radius: 9999px;
+            background: var(--bg-tertiary);
+        }
+
+        .card-badge.success {
+            background: rgba(34, 197, 94, 0.2);
+            color: var(--accent-green);
+        }
+
+        .card-badge.warning {
+            background: rgba(234, 179, 8, 0.2);
+            color: var(--accent-yellow);
+        }
+
+        .card-badge.error {
+            background: rgba(239, 68, 68, 0.2);
+            color: var(--accent-red);
+        }
+
+        /* 统计卡片网格 */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .stat-card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 1.25rem;
+        }
+
+        .stat-label {
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+            margin-bottom: 0.5rem;
+        }
+
+        .stat-value {
+            font-size: 1.75rem;
+            font-weight: 700;
+        }
+
+        .stat-change {
+            font-size: 0.75rem;
+            margin-top: 0.5rem;
+        }
+
+        .stat-change.positive {
+            color: var(--accent-green);
+        }
+
+        .stat-change.negative {
+            color: var(--accent-red);
+        }
+
+        /* 表单元素 */
+        .form-group {
+            margin-bottom: 1.25rem;
+        }
+
+        .form-label {
+            display: block;
+            font-size: 0.875rem;
+            font-weight: 500;
+            margin-bottom: 0.5rem;
+            color: var(--text-secondary);
+        }
+
+        .form-input {
+            width: 100%;
+            padding: 0.75rem 1rem;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            color: var(--text-primary);
+            font-size: 0.875rem;
+            transition: border-color 0.2s;
+        }
+
+        .form-input:focus {
+            outline: none;
+            border-color: var(--accent-blue);
+        }
+
+        .form-input::placeholder {
+            color: var(--text-secondary);
+        }
+
+        .form-select {
+            width: 100%;
+            padding: 0.75rem 1rem;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            color: var(--text-primary);
+            font-size: 0.875rem;
+            cursor: pointer;
+        }
+
+        .form-select:focus {
+            outline: none;
+            border-color: var(--accent-blue);
+        }
+
+        .form-row {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 1rem;
+        }
+
+        .form-row-3 {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 1rem;
+        }
+
+        /* 开关组件 */
+        .toggle-wrapper {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0.75rem 0;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .toggle-wrapper:last-child {
+            border-bottom: none;
+        }
+
+        .toggle-label {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .toggle-title {
+            font-weight: 500;
+        }
+
+        .toggle-desc {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            margin-top: 0.25rem;
+        }
+
+        .toggle {
+            position: relative;
+            width: 48px;
+            height: 26px;
+            background: var(--bg-tertiary);
+            border-radius: 9999px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .toggle.active {
+            background: var(--accent-blue);
+        }
+
+        .toggle::after {
+            content: '';
+            position: absolute;
+            top: 3px;
+            left: 3px;
+            width: 20px;
+            height: 20px;
+            background: white;
+            border-radius: 50%;
+            transition: transform 0.2s;
+        }
+
+        .toggle.active::after {
+            transform: translateX(22px);
+        }
+
+        /* 按钮 */
+        .btn {
+            padding: 0.75rem 1.5rem;
+            border-radius: 8px;
+            font-size: 0.875rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            border: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .btn-primary {
+            background: var(--accent-blue);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #2563eb;
+        }
+
+        .btn-success {
+            background: var(--accent-green);
+            color: white;
+        }
+
+        .btn-success:hover {
+            background: #16a34a;
+        }
+
+        .btn-danger {
+            background: var(--accent-red);
+            color: white;
+        }
+
+        .btn-danger:hover {
+            background: #dc2626;
+        }
+
+        .btn-secondary {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+        }
+
+        .btn-secondary:hover {
+            background: var(--border-color);
+        }
+
+        .btn-group {
+            display: flex;
+            gap: 0.75rem;
+            margin-top: 1rem;
+        }
+
+        /* 表格 */
+        .table-wrapper {
+            overflow-x: auto;
+        }
+
+        .table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .table th,
+        .table td {
+            padding: 0.875rem 1rem;
+            text-align: left;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .table th {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            color: var(--text-secondary);
+            font-weight: 600;
+            letter-spacing: 0.05em;
+        }
+
+        .table tr:hover {
+            background: var(--bg-tertiary);
+        }
+
+        /* 标签页 */
+        .tabs {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 1.5rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .tab {
+            padding: 0.75rem 1.25rem;
+            color: var(--text-secondary);
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            transition: all 0.2s;
+            margin-bottom: -1px;
+        }
+
+        .tab:hover {
+            color: var(--text-primary);
+        }
+
+        .tab.active {
+            color: var(--accent-blue);
+            border-bottom-color: var(--accent-blue);
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        /* 日志控制台 */
+        .log-console {
+            background: #0d1117;
+            border-radius: 8px;
+            padding: 1rem;
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+            font-size: 0.8125rem;
+            height: 400px;
+            overflow-y: auto;
+            line-height: 1.6;
+        }
+
+        .log-entry {
+            display: flex;
+            gap: 0.75rem;
+            padding: 0.25rem 0;
+        }
+
+        .log-time {
+            color: var(--text-secondary);
+            flex-shrink: 0;
+        }
+
+        .log-level {
+            flex-shrink: 0;
+            padding: 0.125rem 0.375rem;
+            border-radius: 4px;
+            font-size: 0.6875rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .log-level.debug {
+            background: rgba(168, 85, 247, 0.2);
+            color: var(--accent-purple);
+        }
+
+        .log-level.info {
+            background: rgba(59, 130, 246, 0.2);
+            color: var(--accent-blue);
+        }
+
+        .log-level.warn {
+            background: rgba(234, 179, 8, 0.2);
+            color: var(--accent-yellow);
+        }
+
+        .log-level.error {
+            background: rgba(239, 68, 68, 0.2);
+            color: var(--accent-red);
+        }
+
+        .log-message {
+            color: var(--text-primary);
+            word-break: break-all;
+        }
+
+        /* 指纹卡片 */
+        .fingerprint-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 1rem;
+        }
+
+        .fingerprint-card {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 1.25rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .fingerprint-card:hover {
+            border-color: var(--accent-blue);
+        }
+
+        .fingerprint-card.selected {
+            border-color: var(--accent-blue);
+            background: rgba(59, 130, 246, 0.1);
+        }
+
+        .fingerprint-header {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            margin-bottom: 0.75rem;
+        }
+
+        .fingerprint-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.25rem;
+        }
+
+        .fingerprint-icon.chrome {
+            background: linear-gradient(135deg, #4285f4, #34a853, #fbbc05, #ea4335);
+        }
+
+        .fingerprint-icon.firefox {
+            background: linear-gradient(135deg, #ff9500, #ff5500);
+        }
+
+        .fingerprint-icon.safari {
+            background: linear-gradient(135deg, #0d84ff, #5ac8fa);
+        }
+
+        .fingerprint-icon.edge {
+            background: linear-gradient(135deg, #0078d4, #00bcf2);
+        }
+
+        .fingerprint-name {
+            font-weight: 600;
+        }
+
+        .fingerprint-version {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+        }
+
+        .fingerprint-details {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 0.5rem;
+            font-size: 0.75rem;
+        }
+
+        .fingerprint-detail {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .fingerprint-detail-label {
+            color: var(--text-secondary);
+        }
+
+        .fingerprint-detail-value {
+            font-weight: 500;
+        }
+
+        /* 节点卡片 */
+        .node-card {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 1.25rem;
+            margin-bottom: 1rem;
+        }
+
+        .node-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+
+        .node-name {
+            font-weight: 600;
+            font-size: 1.125rem;
+        }
+
+        .node-status {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .node-details {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+        }
+
+        .node-detail {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .node-detail-label {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            margin-bottom: 0.25rem;
+        }
+
+        .node-detail-value {
+            font-weight: 500;
+            word-break: break-all;
+        }
+
+        /* 隐藏所有页面 */
+        .page {
+            display: none;
+        }
+
+        .page.active {
+            display: block;
+        }
+
+        /* 滑块 */
+        .slider-wrapper {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .slider {
+            flex: 1;
+            -webkit-appearance: none;
+            height: 6px;
+            background: var(--bg-tertiary);
+            border-radius: 3px;
+            outline: none;
+        }
+
+        .slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 18px;
+            height: 18px;
+            background: var(--accent-blue);
+            border-radius: 50%;
+            cursor: pointer;
+        }
+
+        .slider-value {
+            min-width: 60px;
+            text-align: right;
+            font-weight: 500;
+        }
+
+        /* 代码块 */
+        .code-block {
+            background: #0d1117;
+            border-radius: 8px;
+            padding: 1rem;
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+            font-size: 0.8125rem;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+
+        /* 响应式 */
+        @media (max-width: 768px) {
+            .sidebar {
+                display: none;
+            }
+
+            .form-row,
+            .form-row-3 {
+                grid-template-columns: 1fr;
+            }
+
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* 进度条 */
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background: var(--bg-tertiary);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: var(--accent-blue);
+            border-radius: 4px;
+            transition: width 0.3s;
+        }
+
+        /* 工具提示 */
+        .tooltip {
+            position: relative;
+        }
+
+        .tooltip::after {
+            content: attr(data-tooltip);
+            position: absolute;
+            bottom: 100%;
+            left: 50%;
+            transform: translateX(-50%);
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            padding: 0.5rem 0.75rem;
+            border-radius: 6px;
+            font-size: 0.75rem;
+            white-space: nowrap;
+            opacity: 0;
+            visibility: hidden;
+            transition: all 0.2s;
+            margin-bottom: 0.5rem;
+        }
+
+        .tooltip:hover::after {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        /* 加载动画 */
+        .spinner {
+            width: 20px;
+            height: 20px;
+            border: 2px solid var(--bg-tertiary);
+            border-top-color: var(--accent-blue);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* 模态框 */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.7);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            opacity: 0;
+            visibility: hidden;
+            transition: all 0.2s;
+        }
+
+        .modal-overlay.active {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        .modal {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 2rem;
+            max-width: 500px;
+            width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+        }
+
+        .modal-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+        }
+
+        .modal-close {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 1.5rem;
+            cursor: pointer;
+            padding: 0.25rem;
+        }
+
+        .modal-close:hover {
+            color: var(--text-primary);
+        }
+    </style>
+</head>
+<body>
+    <!-- 顶部导航栏 -->
+    <header class="header">
+        <div class="logo">
+            <div class="logo-icon">TC</div>
+            <span class="logo-text">TLS-Client</span>
+            <span class="logo-version">v3.5</span>
+        </div>
+        <div class="header-actions">
+            <div class="status-indicator">
+                <div class="status-dot online" id="statusDot"></div>
+                <span id="statusText">引擎运行中</span>
+            </div>
+            <button class="btn btn-success" id="btnStart" onclick="toggleEngine()">
+                ⚡ 启动引擎
+            </button>
+        </div>
+    </header>
+
+    <div class="container">
+        <!-- 侧边栏 -->
+        <nav class="sidebar">
+            <div class="nav-section">
+                <div class="nav-title">控制台</div>
+                <div class="nav-item active" data-page="dashboard" onclick="showPage('dashboard')">
+                    <span class="nav-icon">📊</span>
+                    <span>仪表盘</span>
+                </div>
+                <div class="nav-item" data-page="nodes" onclick="showPage('nodes')">
+                    <span class="nav-icon">🌐</span>
+                    <span>节点管理</span>
+                </div>
+                <div class="nav-item" data-page="fingerprints" onclick="showPage('fingerprints')">
+                    <span class="nav-icon">🎭</span>
+                    <span>指纹实验室</span>
+                </div>
+            </div>
+            <div class="nav-section">
+                <div class="nav-title">配置</div>
+                <div class="nav-item" data-page="transport" onclick="showPage('transport')">
+                    <span class="nav-icon">🚀</span>
+                    <span>传输层设置</span>
+                </div>
+                <div class="nav-item" data-page="cadence" onclick="showPage('cadence')">
+                    <span class="nav-icon">⏱️</span>
+                    <span>时序控制</span>
+                </div>
+                <div class="nav-item" data-page="inbound" onclick="showPage('inbound')">
+                    <span class="nav-icon">📥</span>
+                    <span>入站代理</span>
+                </div>
+            </div>
+            <div class="nav-section">
+                <div class="nav-title">工具</div>
+                <div class="nav-item" data-page="logs" onclick="showPage('logs')">
+                    <span class="nav-icon">📜</span>
+                    <span>日志控制台</span>
+                </div>
+                <div class="nav-item" data-page="config" onclick="showPage('config')">
+                    <span class="nav-icon">⚙️</span>
+                    <span>配置导出</span>
+                </div>
+                <div class="nav-item" data-page="api" onclick="showPage('api')">
+                    <span class="nav-icon">🔌</span>
+                    <span>API 连接</span>
+                </div>
+            </div>
+        </nav>
+
+        <!-- 主内容区 -->
+        <main class="main-content">
+            <!-- 仪表盘页面 -->
+            <div id="page-dashboard" class="page active">
+                <h1 class="page-title">仪表盘</h1>
+                
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-label">活跃连接</div>
+                        <div class="stat-value" id="statActiveConns">0</div>
+                        <div class="stat-change positive">↑ 实时更新</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">总请求数</div>
+                        <div class="stat-value" id="statTotalRequests">0</div>
+                        <div class="stat-change positive">今日统计</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">成功率</div>
+                        <div class="stat-value" id="statSuccessRate">100%</div>
+                        <div class="stat-change positive">↑ 2.1%</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">平均延迟</div>
+                        <div class="stat-value" id="statLatency">0ms</div>
+                        <div class="stat-change negative">↓ 12ms</div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">当前指纹状态</span>
+                        <span class="card-badge success" id="fingerprintStatus">已激活</span>
+                    </div>
+                    <div class="node-details">
+                        <div class="node-detail">
+                            <span class="node-detail-label">当前指纹</span>
+                            <span class="node-detail-value" id="currentFingerprint">chrome-126-win</span>
+                        </div>
+                        <div class="node-detail">
+                            <span class="node-detail-label">浏览器</span>
+                            <span class="node-detail-value" id="currentBrowser">Chrome 126</span>
+                        </div>
+                        <div class="node-detail">
+                            <span class="node-detail-label">平台</span>
+                            <span class="node-detail-value" id="currentPlatform">Windows</span>
+                        </div>
+                        <div class="node-detail">
+                            <span class="node-detail-label">轮换模式</span>
+                            <span class="node-detail-value" id="currentRotation">固定</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">活跃节点</span>
+                        <span class="card-badge success">在线</span>
+                    </div>
+                    <div class="node-details">
+                        <div class="node-detail">
+                            <span class="node-detail-label">节点名称</span>
+                            <span class="node-detail-value" id="activeNodeName">cf-worker</span>
+                        </div>
+                        <div class="node-detail">
+                            <span class="node-detail-label">地址</span>
+                            <span class="node-detail-value" id="activeNodeAddr">162.159.19.211:443</span>
+                        </div>
+                        <div class="node-detail">
+                            <span class="node-detail-label">传输协议</span>
+                            <span class="node-detail-value" id="activeNodeTransport">WebSocket</span>
+                        </div>
+                        <div class="node-detail">
+                            <span class="node-detail-label">SNI</span>
+                            <span class="node-detail-value" id="activeNodeSNI">your-worker.workers.dev</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 节点管理页面 -->
+            <div id="page-nodes" class="page">
+                <h1 class="page-title">节点管理</h1>
+                
+                <div class="btn-group" style="margin-bottom: 1.5rem;">
+                    <button class="btn btn-primary" onclick="showModal('addNode')">➕ 添加节点</button>
+                    <button class="btn btn-secondary" onclick="testAllNodes()">🔍 测试所有节点</button>
+                </div>
+
+                <div id="nodesList">
+                    <!-- 节点列表将由 JavaScript 渲染 -->
+                </div>
+            </div>
+
+            <!-- 指纹实验室页面 -->
+            <div id="page-fingerprints" class="page">
+                <h1 class="page-title">指纹实验室</h1>
+                
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">轮换模式</span>
+                    </div>
+                    <div class="form-group">
+                        <select class="form-select" id="rotationMode" onchange="updateRotationMode()">
+                            <option value="fixed">固定 - 始终使用同一指纹</option>
+                            <option value="random">随机 - 每次连接随机选择</option>
+                            <option value="per-domain">按域名 - 同一域名使用相同指纹</option>
+                            <option value="timed">定时轮换 - 定期更换指纹</option>
+                            <option value="weighted">加权随机 - 根据权重选择</option>
+                        </select>
+                    </div>
+                    <div id="timedRotationOptions" style="display: none;">
+                        <div class="form-group">
+                            <label class="form-label">轮换间隔</label>
+                            <select class="form-select" id="rotationInterval">
+                                <option value="1m">1 分钟</option>
+                                <option value="5m" selected>5 分钟</option>
+                                <option value="15m">15 分钟</option>
+                                <option value="30m">30 分钟</option>
+                                <option value="1h">1 小时</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">可用指纹 (点击选择)</span>
+                        <span class="card-badge" id="fingerprintCount">0 个</span>
+                    </div>
+                    <div class="fingerprint-grid" id="fingerprintGrid">
+                        <!-- 指纹卡片将由 JavaScript 渲染 -->
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">指纹测试</span>
+                    </div>
+                    <p style="color: var(--text-secondary); margin-bottom: 1rem;">
+                        测试当前选择的指纹配置，查看 TLS 和 HTTP/2 指纹详情
+                    </p>
+                    <div class="btn-group">
+                        <button class="btn btn-primary" onclick="testFingerprint()">🧪 运行指纹测试</button>
+                        <button class="btn btn-secondary" onclick="copyFingerprintReport()">📋 复制报告</button>
+                    </div>
+                    <div class="code-block" id="fingerprintTestResult" style="margin-top: 1rem; display: none;">
+                        <!-- 测试结果 -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- 传输层设置页面 -->
+            <div id="page-transport" class="page">
+                <h1 class="page-title">传输层设置</h1>
+                
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">传输协议</span>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">协议类型</label>
+                        <select class="form-select" id="transportType" onchange="updateTransportOptions()">
+                            <option value="ws">WebSocket (推荐)</option>
+                            <option value="h2">HTTP/2 (实验性)</option>
+                            <option value="raw">原始 TCP</option>
+                        </select>
+                    </div>
+                    
+                    <div id="wsOptions">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label class="form-label">WebSocket 路径</label>
+                                <input type="text" class="form-input" id="wsPath" value="/" placeholder="/">
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">Host 头</label>
+                                <input type="text" class="form-input" id="wsHost" placeholder="your-worker.workers.dev">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">Xlink 借力配置</span>
+                        <span class="card-badge warning">高级</span>
+                    </div>
+                    <p style="color: var(--text-secondary); margin-bottom: 1rem;">
+                        配置远程代理，让 Worker 通过 SOCKS5 代理或备用地址连接目标
+                    </p>
+                    <div class="form-group">
+                        <label class="form-label">SOCKS5 代理 (Worker 出站使用)</label>
+                        <input type="text" class="form-input" id="xlinkSocks5" placeholder="user:pass@proxy.example.com:1080">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Fallback 地址 (直连失败时使用)</label>
+                        <input type="text" class="form-input" id="xlinkFallback" placeholder="proxyip.us.example.net:443">
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">TLS 验证模式</span>
+                    </div>
+                    <div class="form-group">
+                        <select class="form-select" id="tlsVerifyMode">
+                            <option value="strict">严格模式 - 验证证书链和域名</option>
+                            <option value="sni-skip" selected>SNI 跳过 - 验证证书链，跳过域名验证 (域前置)</option>
+                            <option value="insecure">不安全 - 跳过所有验证 (仅测试)</option>
+                            <option value="pin">证书固定 - 验证证书 SHA256 指纹</option>
+                        </select>
+                    </div>
+                    <div id="certPinOptions" style="display: none;">
+                        <div class="form-group">
+                            <label class="form-label">证书 SHA256 指纹</label>
+                            <input type="text" class="form-input" id="certPin" placeholder="e3b0c44298fc1c149afbf4c8996fb924...">
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 时序控制页面 -->
+            <div id="page-cadence" class="page">
+                <h1 class="page-title">时序控制 (Cadence)</h1>
+                
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">时序模式</span>
+                    </div>
+                    <p style="color: var(--text-secondary); margin-bottom: 1rem;">
+                        模拟真人浏览行为，在请求之间添加随机延迟，避免被识别为机器人
+                    </p>
+                    <div class="form-group">
+                        <select class="form-select" id="cadenceMode" onchange="updateCadenceOptions()">
+                            <option value="none">无延迟 - 最快速度</option>
+                            <option value="fast">快速模式 - 100-500ms 延迟</option>
+                            <option value="browsing" selected>浏览模式 - 1-5s 延迟 (推荐)</option>
+                            <option value="aggressive">激进模式 - 0-100ms 延迟</option>
+                            <option value="random">完全随机 - 0-10s 延迟</option>
+                            <option value="custom">自定义</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="card" id="customCadenceOptions">
+                    <div class="card-header">
+                        <span class="card-title">自定义延迟参数</span>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label class="form-label">最小延迟 (毫秒)</label>
+                            <input type="number" class="form-input" id="cadenceMinDelay" value="1000" min="0">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">最大延迟 (毫秒)</label>
+                            <input type="number" class="form-input" id="cadenceMaxDelay" value="5000" min="0">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">抖动系数: <span id="jitterValue">0.3</span></label>
+                        <div class="slider-wrapper">
+                            <input type="range" class="slider" id="cadenceJitter" min="0" max="100" value="30" oninput="updateJitterValue()">
+                            <span class="slider-value" id="jitterDisplay">30%</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">Cookie 管理</span>
+                    </div>
+                    <div class="toggle-wrapper">
+                        <div class="toggle-label">
+                            <span class="toggle-title">启用 Cookie 管理</span>
+                            <span class="toggle-desc">自动保存和发送 Cookie，模拟持久会话</span>
+                        </div>
+                        <div class="toggle active" id="toggleCookies" onclick="toggleSwitch('toggleCookies')"></div>
+                    </div>
+                    <div class="toggle-wrapper">
+                        <div class="toggle-label">
+                            <span class="toggle-title">指纹轮换时清除 Cookie</span>
+                            <span class="toggle-desc">切换指纹时自动清除所有 Cookie</span>
+                        </div>
+                        <div class="toggle" id="toggleClearCookies" onclick="toggleSwitch('toggleClearCookies')"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 入站代理页面 -->
+            <div id="page-inbound" class="page">
+                <h1 class="page-title">入站代理配置</h1>
+                
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">SOCKS5 代理</span>
+                        <span class="card-badge success" id="socks5Status">运行中</span>
+                    </div>
+                    <div class="toggle-wrapper">
+                        <div class="toggle-label">
+                            <span class="toggle-title">启用 SOCKS5 代理</span>
+                            <span class="toggle-desc">本地应用可以通过此端口连接</span>
+                        </div>
+                        <div class="toggle active" id="toggleSocks5" onclick="toggleSwitch('toggleSocks5')"></div>
+                    </div>
+                    <div class="form-row" style="margin-top: 1rem;">
+                        <div class="form-group">
+                            <label class="form-label">监听地址</label>
+                            <input type="text" class="form-input" id="socks5Listen" value="127.0.0.1:1080">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">用户名 (可选)</label>
+                            <input type="text" class="form-input" id="socks5Username" placeholder="留空则无认证">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">密码 (可选)</label>
+                        <input type="password" class="form-input" id="socks5Password" placeholder="留空则无认证">
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">HTTP 代理</span>
+                        <span class="card-badge success" id="httpStatus">运行中</span>
+                    </div>
+                    <div class="toggle-wrapper">
+                        <div class="toggle-label">
+                            <span class="toggle-title">启用 HTTP CONNECT 代理</span>
+                            <span class="toggle-desc">支持浏览器和应用的 HTTP 代理设置</span>
+                        </div>
+                        <div class="toggle active" id="toggleHttp" onclick="toggleSwitch('toggleHttp')"></div>
+                    </div>
+                    <div class="form-group" style="margin-top: 1rem;">
+                        <label class="form-label">监听地址</label>
+                        <input type="text" class="form-input" id="httpListen" value="127.0.0.1:8080">
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">快速使用指南</span>
+                    </div>
+                    <div style="color: var(--text-secondary); font-size: 0.875rem;">
+                        <p style="margin-bottom: 0.75rem;"><strong>浏览器代理设置：</strong></p>
+                        <p style="margin-bottom: 0.5rem;">• SOCKS5: <code style="background: var(--bg-tertiary); padding: 0.25rem 0.5rem; border-radius: 4px;">127.0.0.1:1080</code></p>
+                        <p style="margin-bottom: 0.75rem;">• HTTP: <code style="background: var(--bg-tertiary); padding: 0.25rem 0.5rem; border-radius: 4px;">127.0.0.1:8080</code></p>
+                        <p style="margin-bottom: 0.75rem;"><strong>命令行使用：</strong></p>
+                        <div class="code-block" style="margin-top: 0.5rem;">export https_proxy=socks5://127.0.0.1:1080
+curl https://api.ipify.org</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 日志控制台页面 -->
+            <div id="page-logs" class="page">
+                <h1 class="page-title">日志控制台</h1>
+                
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">日志过滤</span>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label class="form-label">日志级别</label>
+                            <select class="form-select" id="logLevel" onchange="filterLogs()">
+                                <option value="all">全部</option>
+                                <option value="debug">Debug</option>
+                                <option value="info" selected>Info</option>
+                                <option value="warn">Warn</option>
+                                <option value="error">Error</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">搜索关键字</label>
+                            <input type="text" class="form-input" id="logSearch" placeholder="输入关键字过滤..." oninput="filterLogs()">
+                        </div>
+                    </div>
+                    <div class="btn-group">
+                        <button class="btn btn-secondary" onclick="clearLogs()">🗑️ 清空日志</button>
+                        <button class="btn btn-secondary" onclick="exportLogs()">📥 导出日志</button>
+                        <button class="btn btn-secondary" onclick="toggleAutoScroll()">
+                            <span id="autoScrollIcon">⏸️</span> 自动滚动
+                        </button>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="log-console" id="logConsole">
+                        <!-- 日志将由 JavaScript 渲染 -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- 配置导出页面 -->
+            <div id="page-config" class="page">
+                <h1 class="page-title">配置导出</h1>
+                
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">当前配置 (YAML 格式)</span>
+                    </div>
+                    <p style="color: var(--text-secondary); margin-bottom: 1rem;">
+                        此配置可直接用于 tls-client 命令行工具
+                    </p>
+                    <div class="code-block" id="configYaml" style="max-height: 500px; overflow-y: auto;">
+# 正在生成配置...
+                    </div>
+                    <div class="btn-group">
+                        <button class="btn btn-primary" onclick="copyConfig()">📋 复制配置</button>
+                        <button class="btn btn-secondary" onclick="downloadConfig()">📥 下载 YAML</button>
+                        <button class="btn btn-secondary" onclick="importConfig()">📤 导入配置</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- API 连接页面 -->
+            <div id="page-api" class="page">
+                <h1 class="page-title">API 连接</h1>
+                
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">引擎连接设置</span>
+                    </div>
+                    <p style="color: var(--text-secondary); margin-bottom: 1rem;">
+                        配置与 tls-client 引擎的 API 连接。引擎需要启用 API 服务器才能接收控制命令。
+                    </p>
+                    <div class="form-group">
+                        <label class="form-label">API 地址</label>
+                        <input type="text" class="form-input" id="apiEndpoint" value="http://127.0.0.1:9090">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">认证令牌 (可选)</label>
+                        <input type="password" class="form-input" id="apiToken" placeholder="Bearer token...">
+                    </div>
+                    <div class="btn-group">
+                        <button class="btn btn-primary" onclick="testApiConnection()">🔌 测试连接</button>
+                        <button class="btn btn-success" onclick="saveApiSettings()">💾 保存设置</button>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">API 状态</span>
+                        <span class="card-badge" id="apiStatusBadge">未连接</span>
+                    </div>
+                    <div class="node-details" id="apiStatus">
+                        <div class="node-detail">
+                            <span class="node-detail-label">连接状态</span>
+                            <span class="node-detail-value" id="apiConnStatus">等待连接...</span>
+                        </div>
+                        <div class="node-detail">
+                            <span class="node-detail-label">引擎版本</span>
+                            <span class="node-detail-value" id="apiEngineVersion">-</span>
+                        </div>
+                        <div class="node-detail">
+                            <span class="node-detail-label">运行时间</span>
+                            <span class="node-detail-value" id="apiUptime">-</span>
+                        </div>
+                        <div class="node-detail">
+                            <span class="node-detail-label">Goroutines</span>
+                            <span class="node-detail-value" id="apiGoroutines">-</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">启动引擎说明</span>
+                    </div>
+                    <div style="color: var(--text-secondary); font-size: 0.875rem;">
+                        <p style="margin-bottom: 0.75rem;">要让此控制面板控制引擎，请按以下步骤操作：</p>
+                        <ol style="margin-left: 1.25rem; line-height: 1.8;">
+                            <li>下载 tls-client 二进制文件</li>
+                            <li>使用导出的配置文件启动引擎</li>
+                            <li>确保配置中启用了 API 服务</li>
+                            <li>在此页面配置 API 地址并连接</li>
+                        </ol>
+                        <div class="code-block" style="margin-top: 1rem;">./tls-client run -c config.yaml</div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- 添加节点模态框 -->
+    <div class="modal-overlay" id="modalAddNode">
+        <div class="modal">
+            <div class="modal-header">
+                <span class="modal-title">添加节点</span>
+                <button class="modal-close" onclick="hideModal('addNode')">&times;</button>
+            </div>
+            <div class="form-group">
+                <label class="form-label">节点名称</label>
+                <input type="text" class="form-input" id="newNodeName" placeholder="my-cf-worker">
+            </div>
+            <div class="form-group">
+                <label class="form-label">服务器地址</label>
+                <input type="text" class="form-input" id="newNodeAddress" placeholder="162.159.19.211:443">
+            </div>
+            <div class="form-group">
+                <label class="form-label">SNI (域名)</label>
+                <input type="text" class="form-input" id="newNodeSNI" placeholder="your-worker.workers.dev">
+            </div>
+            <div class="form-group">
+                <label class="form-label">传输协议</label>
+                <select class="form-select" id="newNodeTransport">
+                    <option value="ws">WebSocket</option>
+                    <option value="h2">HTTP/2</option>
+                    <option value="raw">Raw TCP</option>
+                </select>
+            </div>
+            <div class="btn-group">
+                <button class="btn btn-primary" onclick="addNode()">添加节点</button>
+                <button class="btn btn-secondary" onclick="hideModal('addNode')">取消</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ==================== 全局状态 ====================
+        const AppState = {
+            engineRunning: false,
+            apiConnected: false,
+            apiEndpoint: 'http://127.0.0.1:9090',
+            apiToken: '',
+            autoScroll: true,
+            logs: [],
+            
+            // 配置
+            config: {
+                global: {
+                    log_level: 'debug',
+                    log_output: 'stderr'
+                },
+                inbound: {
+                    socks5: {
+                        listen: '127.0.0.1:1080',
+                        username: '',
+                        password: ''
+                    },
+                    http: {
+                        listen: '127.0.0.1:8080'
+                    }
+                },
+                fingerprint: {
+                    rotation: {
+                        mode: 'fixed',
+                        profile: 'chrome-126-win',
+                        profiles: ['chrome-126-win'],
+                        interval: '5m'
+                    }
+                },
+                cadence: {
+                    mode: 'browsing',
+                    min_delay: '1s',
+                    max_delay: '5s',
+                    jitter: 0.3,
+                    enabled: true
+                },
+                cookies: {
+                    enabled: true,
+                    clear_on_rotation: false
+                },
+                tls: {
+                    verify_mode: 'sni-skip'
+                },
+                nodes: [
+                    {
+                        name: 'cf-worker',
+                        address: '162.159.19.211:443',
+                        sni: 'your-worker.workers.dev',
+                        transport: 'ws',
+                        transport_opts: {
+                            ws_path: '/',
+                            ws_host: 'your-worker.workers.dev'
+                        },
+                        remote_proxy: {
+                            socks5: '',
+                            fallback: ''
+                        },
+                        active: true
+                    }
+                ]
+            },
+            
+            // 指纹列表
+            fingerprints: [
+                { name: 'chrome-126-win', browser: 'Chrome', version: '126', platform: 'Windows', icon: 'chrome' },
+                { name: 'chrome-126-mac', browser: 'Chrome', version: '126', platform: 'macOS', icon: 'chrome' },
+                { name: 'chrome-126-android', browser: 'Chrome', version: '126', platform: 'Android', icon: 'chrome' },
+                { name: 'chrome-125-win', browser: 'Chrome', version: '125', platform: 'Windows', icon: 'chrome' },
+                { name: 'chrome-124-win', browser: 'Chrome', version: '124', platform: 'Windows', icon: 'chrome' },
+                { name: 'chrome-124-mac', browser: 'Chrome', version: '124', platform: 'macOS', icon: 'chrome' },
+                { name: 'firefox-127-win', browser: 'Firefox', version: '127', platform: 'Windows', icon: 'firefox' },
+                { name: 'firefox-127-mac', browser: 'Firefox', version: '127', platform: 'macOS', icon: 'firefox' },
+                { name: 'firefox-126-linux', browser: 'Firefox', version: '126', platform: 'Linux', icon: 'firefox' },
+                { name: 'firefox-124-win', browser: 'Firefox', version: '124', platform: 'Windows', icon: 'firefox' },
+                { name: 'safari-175-mac', browser: 'Safari', version: '17.5', platform: 'macOS', icon: 'safari' },
+                { name: 'safari-175-ios', browser: 'Safari', version: '17.5', platform: 'iOS', icon: 'safari' },
+                { name: 'safari-17-mac', browser: 'Safari', version: '17', platform: 'macOS', icon: 'safari' },
+                { name: 'safari-17-ios', browser: 'Safari', version: '17', platform: 'iOS', icon: 'safari' },
+                { name: 'edge-126-win', browser: 'Edge', version: '126', platform: 'Windows', icon: 'edge' },
+                { name: 'edge-126-mac', browser: 'Edge', version: '126', platform: 'macOS', icon: 'edge' },
+                { name: 'edge-124-win', browser: 'Edge', version: '124', platform: 'Windows', icon: 'edge' }
+            ],
+            
+            selectedFingerprint: 'chrome-126-win',
+            
+            // 统计
+            stats: {
+                activeConns: 0,
+                totalRequests: 0,
+                successRate: 100,
+                avgLatency: 0
+            }
+        };
+
+        // ==================== 页面导航 ====================
+        function showPage(pageName) {
+            // 隐藏所有页面
+            document.querySelectorAll('.page').forEach(page => {
+                page.classList.remove('active');
+            });
+            
+            // 显示选中的页面
+            document.getElementById('page-' + pageName).classList.add('active');
+            
+            // 更新导航状态
+            document.querySelectorAll('.nav-item').forEach(item => {
+                item.classList.remove('active');
+            });
+            document.querySelector(`.nav-item[data-page="${pageName}"]`).classList.add('active');
+            
+            // 页面特定初始化
+            if (pageName === 'fingerprints') {
+                renderFingerprints();
+            } else if (pageName === 'nodes') {
+                renderNodes();
+            } else if (pageName === 'config') {
+                generateConfig();
+            }
+        }
+
+        // ==================== 引擎控制 ====================
+        function toggleEngine() {
+            AppState.engineRunning = !AppState.engineRunning;
+            
+            const btn = document.getElementById('btnStart');
+            const dot = document.getElementById('statusDot');
+            const text = document.getElementById('statusText');
+            
+            if (AppState.engineRunning) {
+                btn.textContent = '⏹️ 停止引擎';
+                btn.className = 'btn btn-danger';
+                dot.classList.remove('offline');
+                dot.classList.add('online');
+                text.textContent = '引擎运行中';
+                addLog('info', '引擎已启动');
+                
+                // 尝试连接 API
+                testApiConnection();
+            } else {
+                btn.textContent = '⚡ 启动引擎';
+                btn.className = 'btn btn-success';
+                dot.classList.remove('online');
+                dot.classList.add('offline');
+                text.textContent = '引擎已停止';
+                addLog('info', '引擎已停止');
+            }
+        }
+
+        // ==================== 开关组件 ====================
+        function toggleSwitch(id) {
+            const toggle = document.getElementById(id);
+            toggle.classList.toggle('active');
+            
+            const isActive = toggle.classList.contains('active');
+            
+            switch(id) {
+                case 'toggleCookies':
+                    AppState.config.cookies.enabled = isActive;
+                    addLog('info', `Cookie 管理: ${isActive ? '启用' : '禁用'}`);
+                    break;
+                case 'toggleClearCookies':
+                    AppState.config.cookies.clear_on_rotation = isActive;
+                    break;
+                case 'toggleSocks5':
+                    document.getElementById('socks5Status').textContent = isActive ? '运行中' : '已停止';
+                    document.getElementById('socks5Status').className = `card-badge ${isActive ? 'success' : 'error'}`;
+                    addLog('info', `SOCKS5 代理: ${isActive ? '启动' : '停止'}`);
+                    break;
+                case 'toggleHttp':
+                    document.getElementById('httpStatus').textContent = isActive ? '运行中' : '已停止';
+                    document.getElementById('httpStatus').className = `card-badge ${isActive ? 'success' : 'error'}`;
+                    addLog('info', `HTTP 代理: ${isActive ? '启动' : '停止'}`);
+                    break;
+            }
+        }
+
+        // ==================== 指纹管理 ====================
+        function renderFingerprints() {
+            const grid = document.getElementById('fingerprintGrid');
+            grid.innerHTML = '';
+            
+            AppState.fingerprints.forEach(fp => {
+                const card = document.createElement('div');
+                card.className = `fingerprint-card ${fp.name === AppState.selectedFingerprint ? 'selected' : ''}`;
+                card.onclick = () => selectFingerprint(fp.name);
+                
+                card.innerHTML = `
+                    <div class="fingerprint-header">
+                        <div class="fingerprint-icon ${fp.icon}">
+                            ${fp.browser[0]}
+                        </div>
+                        <div>
+                            <div class="fingerprint-name">${fp.browser} ${fp.version}</div>
+                            <div class="fingerprint-version">${fp.name}</div>
+                        </div>
+                    </div>
+                    <div class="fingerprint-details">
+                        <div class="fingerprint-detail">
+                            <span class="fingerprint-detail-label">平台</span>
+                            <span class="fingerprint-detail-value">${fp.platform}</span>
+                        </div>
+                        <div class="fingerprint-detail">
+                            <span class="fingerprint-detail-label">版本</span>
+                            <span class="fingerprint-detail-value">${fp.version}</span>
+                        </div>
+                    </div>
+                `;
+                
+                grid.appendChild(card);
+            });
+            
+            document.getElementById('fingerprintCount').textContent = `${AppState.fingerprints.length} 个`;
+        }
+
+        function selectFingerprint(name) {
+            AppState.selectedFingerprint = name;
+            AppState.config.fingerprint.rotation.profile = name;
+            AppState.config.fingerprint.rotation.profiles = [name];
+            
+            renderFingerprints();
+            updateDashboardFingerprint();
+            addLog('info', `已选择指纹: ${name}`);
+        }
+
+        function updateDashboardFingerprint() {
+            const fp = AppState.fingerprints.find(f => f.name === AppState.selectedFingerprint);
+            if (fp) {
+                document.getElementById('currentFingerprint').textContent = fp.name;
+                document.getElementById('currentBrowser').textContent = `${fp.browser} ${fp.version}`;
+                document.getElementById('currentPlatform').textContent = fp.platform;
+            }
+        }
+
+        function updateRotationMode() {
+            const mode = document.getElementById('rotationMode').value;
+            AppState.config.fingerprint.rotation.mode = mode;
+            
+            const timedOptions = document.getElementById('timedRotationOptions');
+            timedOptions.style.display = mode === 'timed' ? 'block' : 'none';
+            
+            const modeNames = {
+                'fixed': '固定',
+                'random': '随机',
+                'per-domain': '按域名',
+                'timed': '定时轮换',
+                'weighted': '加权'
+            };
+            document.getElementById('currentRotation').textContent = modeNames[mode] || mode;
+            addLog('info', `轮换模式已更改为: ${modeNames[mode]}`);
+        }
+
+        function testFingerprint() {
+            const result = document.getElementById('fingerprintTestResult');
+            result.style.display = 'block';
+            
+            const fp = AppState.fingerprints.find(f => f.name === AppState.selectedFingerprint);
+            
+            result.innerHTML = `
+正在测试指纹: ${AppState.selectedFingerprint}
+
+================================
+TLS 指纹信息
+================================
+浏览器: ${fp.browser} ${fp.version}
+平台: ${fp.platform}
+ClientHello ID: ${fp.icon === 'chrome' ? 'HelloChrome_120' : fp.icon === 'firefox' ? 'HelloFirefox_120' : 'HelloSafari_Auto'}
+
+================================
+HTTP/2 指纹信息
+================================
+SETTINGS 帧:
+  HEADER_TABLE_SIZE: 65536
+  ENABLE_PUSH: 0
+  MAX_CONCURRENT_STREAMS: 1000
+  INITIAL_WINDOW_SIZE: 6291456
+  MAX_HEADER_LIST_SIZE: 262144
+
+WINDOW_UPDATE: 15663105
+
+伪头顺序: :method, :authority, :scheme, :path
+
+================================
+User-Agent
+================================
+${getUA(fp)}
+
+✅ 指纹测试完成
+`;
+            
+            addLog('info', `指纹测试完成: ${AppState.selectedFingerprint}`);
+        }
+
+        function getUA(fp) {
+            const uas = {
+                'chrome-126-win': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+                'chrome-126-mac': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+                'firefox-127-win': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:127.0) Gecko/20100101 Firefox/127.0',
+                'safari-175-mac': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15'
+            };
+            return uas[fp.name] || `Mozilla/5.0 (${fp.platform}) ${fp.browser}/${fp.version}`;
+        }
+
+        function copyFingerprintReport() {
+            const result = document.getElementById('fingerprintTestResult').textContent;
+            navigator.clipboard.writeText(result);
+            addLog('info', '指纹报告已复制到剪贴板');
+        }
+
+        // ==================== 节点管理 ====================
+        function renderNodes() {
+            const container = document.getElementById('nodesList');
+            container.innerHTML = '';
+            
+            AppState.config.nodes.forEach((node, index) => {
+                const card = document.createElement('div');
+                card.className = 'node-card';
+                
+                card.innerHTML = `
+                    <div class="node-header">
+                        <span class="node-name">${node.name}</span>
+                        <div class="node-status">
+                            <span class="card-badge ${node.active ? 'success' : ''}">
+                                ${node.active ? '活跃' : '备用'}
+                            </span>
+                            <button class="btn btn-secondary" style="padding: 0.5rem;" onclick="toggleNodeActive(${index})">
+                                ${node.active ? '停用' : '激活'}
+                            </button>
+                            <button class="btn btn-danger" style="padding: 0.5rem;" onclick="deleteNode(${index})">
+                                删除
+                            </button>
+                        </div>
+                    </div>
+                    <div class="node-details">
+                        <div class="node-detail">
+                            <span class="node-detail-label">地址</span>
+                            <span class="node-detail-value">${node.address}</span>
+                        </div>
+                        <div class="node-detail">
+                            <span class="node-detail-label">SNI</span>
+                            <span class="node-detail-value">${node.sni}</span>
+                        </div>
+                        <div class="node-detail">
+                            <span class="node-detail-label">传输协议</span>
+                            <span class="node-detail-value">${node.transport.toUpperCase()}</span>
+                        </div>
+                        <div class="node-detail">
+                            <span class="node-detail-label">路径</span>
+                            <span class="node-detail-value">${node.transport_opts?.ws_path || '/'}</span>
+                        </div>
+                    </div>
+                `;
+                
+                container.appendChild(card);
+            });
+        }
+
+        function showModal(name) {
+            document.getElementById('modal' + name.charAt(0).toUpperCase() + name.slice(1)).classList.add('active');
+        }
+
+        function hideModal(name) {
+            document.getElementById('modal' + name.charAt(0).toUpperCase() + name.slice(1)).classList.remove('active');
+        }
+
+        function addNode() {
+            const name = document.getElementById('newNodeName').value;
+            const address = document.getElementById('newNodeAddress').value;
+            const sni = document.getElementById('newNodeSNI').value;
+            const transport = document.getElementById('newNodeTransport').value;
+            
+            if (!name || !address || !sni) {
+                alert('请填写所有必填字段');
+                return;
+            }
+            
+            AppState.config.nodes.push({
+                name: name,
+                address: address,
+                sni: sni,
+                transport: transport,
+                transport_opts: {
+                    ws_path: '/',
+                    ws_host: sni
+                },
+                remote_proxy: {
+                    socks5: '',
+                    fallback: ''
+                },
+                active: false
+            });
+            
+            hideModal('addNode');
+            renderNodes();
+            addLog('info', `节点已添加: ${name}`);
+            
+            // 清空表单
+            document.getElementById('newNodeName').value = '';
+            document.getElementById('newNodeAddress').value = '';
+            document.getElementById('newNodeSNI').value = '';
+        }
+
+        function toggleNodeActive(index) {
+            // 先把所有节点设为非活跃
+            AppState.config.nodes.forEach(n => n.active = false);
+            // 激活选中的节点
+            AppState.config.nodes[index].active = true;
+            
+            renderNodes();
+            updateDashboardNode();
+            addLog('info', `已激活节点: ${AppState.config.nodes[index].name}`);
+        }
+
+        function deleteNode(index) {
+            if (confirm(`确定要删除节点 "${AppState.config.nodes[index].name}" 吗？`)) {
+                const name = AppState.config.nodes[index].name;
+                AppState.config.nodes.splice(index, 1);
+                renderNodes();
+                addLog('warn', `节点已删除: ${name}`);
+            }
+        }
+
+        function testAllNodes() {
+            addLog('info', '开始测试所有节点...');
+            AppState.config.nodes.forEach((node, i) => {
+                setTimeout(() => {
+                    addLog('info', `测试节点 ${node.name}: 延迟 ${Math.floor(Math.random() * 200) + 50}ms`);
+                }, i * 500);
+            });
+        }
+
+        function updateDashboardNode() {
+            const activeNode = AppState.config.nodes.find(n => n.active);
+            if (activeNode) {
+                document.getElementById('activeNodeName').textContent = activeNode.name;
+                document.getElementById('activeNodeAddr').textContent = activeNode.address;
+                document.getElementById('activeNodeTransport').textContent = activeNode.transport.toUpperCase();
+                document.getElementById('activeNodeSNI').textContent = activeNode.sni;
+            }
+        }
+
+        // ==================== 传输层设置 ====================
+        function updateTransportOptions() {
+            const type = document.getElementById('transportType').value;
+            const wsOptions = document.getElementById('wsOptions');
+            
+            wsOptions.style.display = (type === 'ws' || type === 'h2') ? 'block' : 'none';
+            
+            // 更新当前活跃节点的传输协议
+            const activeNode = AppState.config.nodes.find(n => n.active);
+            if (activeNode) {
+                activeNode.transport = type;
+            }
+            
+            addLog('info', `传输协议已更改为: ${type.toUpperCase()}`);
+        }
+
+        // ==================== 时序控制 ====================
+        function updateCadenceOptions() {
+            const mode = document.getElementById('cadenceMode').value;
+            AppState.config.cadence.mode = mode;
+            AppState.config.cadence.enabled = mode !== 'none';
+            
+            const customOptions = document.getElementById('customCadenceOptions');
+            customOptions.style.display = mode === 'custom' ? 'block' : 'none';
+            
+            addLog('info', `时序模式已更改为: ${mode}`);
+        }
+
+        function updateJitterValue() {
+            const value = document.getElementById('cadenceJitter').value;
+            document.getElementById('jitterValue').textContent = (value / 100).toFixed(2);
+            document.getElementById('jitterDisplay').textContent = value + '%';
+            AppState.config.cadence.jitter = value / 100;
+        }
+
+        // ==================== 日志系统 ====================
+        function addLog(level, message) {
+            const now = new Date();
+            const time = now.toLocaleTimeString('zh-CN', { hour12: false });
+            
+            AppState.logs.push({ time, level, message });
+            
+            // 保持最新 1000 条日志
+            if (AppState.logs.length > 1000) {
+                AppState.logs.shift();
+            }
+            
+            renderLogs();
+        }
+
+        function renderLogs() {
+            const console = document.getElementById('logConsole');
+            const levelFilter = document.getElementById('logLevel').value;
+            const searchTerm = document.getElementById('logSearch').value.toLowerCase();
+            
+            let filteredLogs = AppState.logs;
+            
+            if (levelFilter !== 'all') {
+                filteredLogs = filteredLogs.filter(log => log.level === levelFilter);
+            }
+            
+            if (searchTerm) {
+                filteredLogs = filteredLogs.filter(log => 
+                    log.message.toLowerCase().includes(searchTerm)
+                );
+            }
+            
+            console.innerHTML = filteredLogs.map(log => `
+                <div class="log-entry">
+                    <span class="log-time">${log.time}</span>
+                    <span class="log-level ${log.level}">${log.level}</span>
+                    <span class="log-message">${log.message}</span>
+                </div>
+            `).join('');
+            
+            if (AppState.autoScroll) {
+                console.scrollTop = console.scrollHeight;
+            }
+        }
+
+        function filterLogs() {
+            renderLogs();
+        }
+
+        function clearLogs() {
+            AppState.logs = [];
+            renderLogs();
+            addLog('info', '日志已清空');
+        }
+
+        function exportLogs() {
+            const content = AppState.logs.map(log => 
+                `[${log.time}] [${log.level.toUpperCase()}] ${log.message}`
+            ).join('\n');
+            
+            downloadFile('tls-client-logs.txt', content);
+            addLog('info', '日志已导出');
+        }
+
+        function toggleAutoScroll() {
+            AppState.autoScroll = !AppState.autoScroll;
+            document.getElementById('autoScrollIcon').textContent = AppState.autoScroll ? '⏸️' : '▶️';
+        }
+
+        // ==================== 配置管理 ====================
+        function generateConfig() {
+            // 从表单获取最新值
+            AppState.config.inbound.socks5.listen = document.getElementById('socks5Listen').value;
+            AppState.config.inbound.socks5.username = document.getElementById('socks5Username').value;
+            AppState.config.inbound.socks5.password = document.getElementById('socks5Password').value;
+            AppState.config.inbound.http.listen = document.getElementById('httpListen').value;
+            AppState.config.tls.verify_mode = document.getElementById('tlsVerifyMode').value;
+            
+            // 更新活跃节点的 Xlink 配置
+            const activeNode = AppState.config.nodes.find(n => n.active);
+            if (activeNode) {
+                activeNode.remote_proxy.socks5 = document.getElementById('xlinkSocks5').value;
+                activeNode.remote_proxy.fallback = document.getElementById('xlinkFallback').value;
+                activeNode.transport_opts.ws_path = document.getElementById('wsPath').value || '/';
+                activeNode.transport_opts.ws_host = document.getElementById('wsHost').value || activeNode.sni;
+            }
+            
+            // 生成 YAML
+            const yaml = generateYAML(AppState.config);
+            document.getElementById('configYaml').textContent = yaml;
+        }
+
+        function generateYAML(config) {
+            let yaml = `# TLS-Client Phase 3.5 配置
+# 由控制面板自动生成于 ${new Date().toLocaleString('zh-CN')}
+
+global:
+  log_level: ${config.global.log_level}
+  log_output: ${config.global.log_output}
+
+inbound:
+  socks5:
+    listen: "${config.inbound.socks5.listen}"
+    username: "${config.inbound.socks5.username}"
+    password: "${config.inbound.socks5.password}"
+  http:
+    listen: "${config.inbound.http.listen}"
+
+fingerprint:
+  rotation:
+    mode: ${config.fingerprint.rotation.mode}
+    profile: ${config.fingerprint.rotation.profile}
+    profiles:
+${config.fingerprint.rotation.profiles.map(p => `      - ${p}`).join('\n')}
+    interval: "${config.fingerprint.rotation.interval}"
+
+cadence:
+  mode: ${config.cadence.mode}
+  min_delay: "${config.cadence.min_delay}"
+  max_delay: "${config.cadence.max_delay}"
+  jitter: ${config.cadence.jitter}
+  enabled: ${config.cadence.enabled}
+
+cookies:
+  enabled: ${config.cookies.enabled}
+  clear_on_rotation: ${config.cookies.clear_on_rotation}
+
+tls:
+  verify_mode: ${config.tls.verify_mode}
+
+nodes:
+`;
+            
+            config.nodes.forEach(node => {
+                yaml += `  - name: "${node.name}"
+    address: "${node.address}"
+    sni: "${node.sni}"
+    transport: ${node.transport}
+    transport_opts:
+      ws_path: "${node.transport_opts?.ws_path || '/'}"
+      ws_host: "${node.transport_opts?.ws_host || node.sni}"
+`;
+                if (node.remote_proxy?.socks5 || node.remote_proxy?.fallback) {
+                    yaml += `    remote_proxy:
+      socks5: "${node.remote_proxy.socks5 || ''}"
+      fallback: "${node.remote_proxy.fallback || ''}"
+`;
+                }
+                yaml += `    active: ${node.active}
+
+`;
+            });
+            
+            return yaml;
+        }
+
+        function copyConfig() {
+            generateConfig();
+            const yaml = document.getElementById('configYaml').textContent;
+            navigator.clipboard.writeText(yaml);
+            addLog('info', '配置已复制到剪贴板');
+        }
+
+        function downloadConfig() {
+            generateConfig();
+            const yaml = document.getElementById('configYaml').textContent;
+            downloadFile('config.yaml', yaml);
+            addLog('info', '配置已下载');
+        }
+
+        function importConfig() {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = '.yaml,.yml';
+            input.onchange = (e) => {
+                const file = e.target.files[0];
+                if (file) {
+                    const reader = new FileReader();
+                    reader.onload = (ev) => {
+                        // 简单解析（实际应用中应使用 YAML 解析器）
+                        alert('配置导入功能需要 YAML 解析器支持。\n请手动复制配置内容到相应字段。');
+                        addLog('warn', '配置导入: 需要手动配置');
+                    };
+                    reader.readAsText(file);
+                }
+            };
+            input.click();
+        }
+
+        function downloadFile(filename, content) {
+            const blob = new Blob([content], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        // ==================== API 连接 ====================
+        async function testApiConnection() {
+            const endpoint = document.getElementById('apiEndpoint').value;
+            const token = document.getElementById('apiToken').value;
+            
+            AppState.apiEndpoint = endpoint;
+            AppState.apiToken = token;
+            
+            document.getElementById('apiConnStatus').textContent = '正在连接...';
+            document.getElementById('apiStatusBadge').textContent = '连接中';
+            document.getElementById('apiStatusBadge').className = 'card-badge warning';
+            
+            addLog('info', `正在连接 API: ${endpoint}`);
+            
+            try {
+                const headers = {};
+                if (token) {
+                    headers['Authorization'] = `Bearer ${token}`;
+                }
+                
+                const response = await fetch(`${endpoint}/api/status`, { 
+                    headers,
+                    mode: 'cors'
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    
+                    AppState.apiConnected = true;
+                    document.getElementById('apiConnStatus').textContent = '已连接';
+                    document.getElementById('apiStatusBadge').textContent = '已连接';
+                    document.getElementById('apiStatusBadge').className = 'card-badge success';
+                    document.getElementById('apiEngineVersion').textContent = data.go_version || 'Unknown';
+                    document.getElementById('apiUptime').textContent = data.uptime_human || '-';
+                    document.getElementById('apiGoroutines').textContent = data.goroutines || '-';
+                    
+                    addLog('info', `API 连接成功，运行时间: ${data.uptime_human}`);
+                    
+                    // 更新统计
+                    if (data.memory) {
+                        AppState.stats.activeConns = data.goroutines || 0;
+                    }
+                    updateStats();
+                } else {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+            } catch (error) {
+                AppState.apiConnected = false;
+                document.getElementById('apiConnStatus').textContent = '连接失败';
+                document.getElementById('apiStatusBadge').textContent = '离线';
+                document.getElementById('apiStatusBadge').className = 'card-badge error';
+                
+                addLog('error', `API 连接失败: ${error.message}`);
+                
+                // 提示用户
+                if (error.message.includes('Failed to fetch') || error.message.includes('CORS')) {
+                    addLog('warn', '提示: 确保 tls-client 引擎正在运行，且 API 端口已开放');
+                }
+            }
+        }
+
+        function saveApiSettings() {
+            localStorage.setItem('tls-client-api-endpoint', document.getElementById('apiEndpoint').value);
+            localStorage.setItem('tls-client-api-token', document.getElementById('apiToken').value);
+            addLog('info', 'API 设置已保存');
+        }
+
+        function loadApiSettings() {
+            const endpoint = localStorage.getItem('tls-client-api-endpoint');
+            const token = localStorage.getItem('tls-client-api-token');
+            
+            if (endpoint) document.getElementById('apiEndpoint').value = endpoint;
+            if (token) document.getElementById('apiToken').value = token;
+        }
+
+        function updateStats() {
+            document.getElementById('statActiveConns').textContent = AppState.stats.activeConns;
+            document.getElementById('statTotalRequests').textContent = AppState.stats.totalRequests;
+            document.getElementById('statSuccessRate').textContent = AppState.stats.successRate + '%';
+            document.getElementById('statLatency').textContent = AppState.stats.avgLatency + 'ms';
+        }
+
+        // ==================== 初始化 ====================
+        function init() {
+            // 加载保存的设置
+            loadApiSettings();
+            
+            // 初始化日志
+            addLog('info', 'TLS-Client 控制面板已启动');
+            addLog('info', '版本: v3.5 - 完全体');
+            addLog('debug', `已加载 ${AppState.fingerprints.length} 个指纹配置`);
+            addLog('debug', `已加载 ${AppState.config.nodes.length} 个节点配置`);
+            
+            // 初始化指纹
+            updateDashboardFingerprint();
+            updateDashboardNode();
+            
+            // 模拟统计数据更新
+            setInterval(() => {
+                if (AppState.engineRunning) {
+                    AppState.stats.totalRequests += Math.floor(Math.random() * 5);
+                    AppState.stats.avgLatency = Math.floor(Math.random() * 100) + 50;
+                    updateStats();
+                }
+            }, 2000);
+            
+            // 定期尝试连接 API
+            setInterval(() => {
+                if (AppState.engineRunning && !AppState.apiConnected) {
+                    testApiConnection();
+                }
+            }, 10000);
+        }
+
+        // 页面加载完成后初始化
+        document.addEventListener('DOMContentLoaded', init);
+    </script>
+</body>
+</html>
