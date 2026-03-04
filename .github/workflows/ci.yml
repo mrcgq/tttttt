@@ -1,3 +1,4 @@
+
 name: CI
 
 on:
@@ -14,6 +15,15 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.24.x"
+      
+      # 确保 webui 目录存在
+      - name: Ensure webui directory exists
+        run: |
+          mkdir -p pkg/api/webui
+          if [ ! -f pkg/api/webui/index.html ]; then
+            echo '<!DOCTYPE html><html><head><title>TLS-Client</title></head><body>Loading...</body></html>' > pkg/api/webui/index.html
+          fi
+      
       - uses: golangci/golangci-lint-action@v6
         with:
           version: latest
@@ -25,6 +35,15 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.24.x"
+      
+      # 确保 webui 目录存在
+      - name: Ensure webui directory exists
+        run: |
+          mkdir -p pkg/api/webui
+          if [ ! -f pkg/api/webui/index.html ]; then
+            echo '<!DOCTYPE html><html><head><title>TLS-Client</title></head><body>Loading...</body></html>' > pkg/api/webui/index.html
+          fi
+      
       - name: Run tests
         run: go test -v -race -coverprofile=coverage.txt ./...
       - name: Upload coverage
@@ -43,6 +62,15 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.24.x"
+      
+      # 确保 webui 目录存在
+      - name: Ensure webui directory exists
+        run: |
+          mkdir -p pkg/api/webui
+          if [ ! -f pkg/api/webui/index.html ]; then
+            echo '<!DOCTYPE html><html><head><title>TLS-Client</title></head><body>Loading...</body></html>' > pkg/api/webui/index.html
+          fi
+      
       - name: Install govulncheck
         run: go install golang.org/x/vuln/cmd/govulncheck@latest
       - name: Run vulnerability check
@@ -77,6 +105,15 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.24.x"
+      
+      # 确保 webui 目录存在
+      - name: Ensure webui directory exists
+        run: |
+          mkdir -p pkg/api/webui
+          if [ ! -f pkg/api/webui/index.html ]; then
+            echo '<!DOCTYPE html><html><head><title>TLS-Client</title></head><body>Loading...</body></html>' > pkg/api/webui/index.html
+          fi
+      
       - name: Build
         env:
           CGO_ENABLED: "0"
@@ -87,7 +124,6 @@ jobs:
           go build -trimpath -ldflags="-s -w" -o /dev/null ./cmd/tls-client/
           echo "✅ ${{ matrix.goos }}/${{ matrix.goarch }} compiled OK"
 
-  # 新增：构建并上传可下载的 artifacts
   build-artifacts:
     runs-on: ubuntu-latest
     steps:
@@ -95,6 +131,14 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.24.x"
+      
+      # 确保 webui 目录存在
+      - name: Ensure webui directory exists
+        run: |
+          mkdir -p pkg/api/webui
+          if [ ! -f pkg/api/webui/index.html ]; then
+            echo '<!DOCTYPE html><html><head><title>TLS-Client</title></head><body>Loading...</body></html>' > pkg/api/webui/index.html
+          fi
       
       - name: Build all platforms
         run: |
@@ -152,6 +196,15 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.24.x"
+      
+      # 确保 webui 目录存在
+      - name: Ensure webui directory exists
+        run: |
+          mkdir -p pkg/api/webui
+          if [ ! -f pkg/api/webui/index.html ]; then
+            echo '<!DOCTYPE html><html><head><title>TLS-Client</title></head><body>Loading...</body></html>' > pkg/api/webui/index.html
+          fi
+      
       - name: Build fpserver
         run: go build -o dist/fpserver ./tools/fpserver/
       - name: Start fpserver
