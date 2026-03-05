@@ -24,7 +24,7 @@ jobs:
           - os: macos-latest
             platform: darwin/universal
             output: tls-client-gui-darwin-universal
-          - os: ubuntu-latest
+          - os: ubuntu-22.04
             platform: linux/amd64
             output: tls-client-gui-linux-amd64
 
@@ -39,31 +39,27 @@ jobs:
       - name: Install Wails
         run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
 
-      # Linux 依赖
+      # Linux 依赖 (Ubuntu 22.04 使用 4.0)
       - name: Install Linux deps
-        if: matrix.os == 'ubuntu-latest'
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev
 
-      # 生成默认图标（如果不存在）
       - name: Generate app icon
         working-directory: gui
         run: |
           if [ ! -f build/appicon.png ]; then
             mkdir -p build
-            # 创建一个 1x1 占位图标
             printf '\x89PNG\r\n\x1a\n' > build/appicon.png
             echo "Using placeholder icon"
           fi
         shell: bash
 
-      # 构建 GUI
       - name: Build GUI
         working-directory: gui
         run: wails build -platform ${{ matrix.platform }} -o ${{ matrix.output }}
 
-      # 上传产物
       - name: Upload GUI artifact
         uses: actions/upload-artifact@v4
         with:
@@ -71,7 +67,6 @@ jobs:
           path: gui/build/bin/*
           retention-days: 30
 
-  # 合并所有平台产物到一个 artifact
   combine-artifacts:
     needs: build-gui
     runs-on: ubuntu-latest
