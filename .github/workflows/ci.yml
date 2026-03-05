@@ -1,4 +1,3 @@
-
 name: CI
 
 on:
@@ -79,7 +78,42 @@ jobs:
           govulncheck ./... 2>&1 || true
           echo "✅ Security scan complete (some stdlib vulnerabilities require Go 1.24+)"
 
+  verify-webui-embed:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.x"
+      - name: Verify WebUI files exist
+        run: |
+          echo "=== Checking WebUI static files ==="
+          test -f pkg/api/webui/index.html || (echo "MISSING: index.html" && exit 1)
+          test -f pkg/api/webui/css/main.css || (echo "MISSING: css/main.css" && exit 1)
+          test -f pkg/api/webui/js/app.js || (echo "MISSING: js/app.js" && exit 1)
+          test -f pkg/api/webui/js/api.js || (echo "MISSING: js/api.js" && exit 1)
+          for page in dashboard nodes fingerprint transport cadence inbound logs config apiconn; do
+            test -f "pkg/api/webui/js/pages/${page}.js" || (echo "MISSING: js/pages/${page}.js" && exit 1)
+          done
+          echo "✅ All WebUI files present"
+      
+      - name: Verify embed compiles
+        run: |
+          CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /dev/null ./cmd/tls-client/
+          echo "✅ WebUI embed compiled successfully"
+      
+      - name: Check embedded file sizes
+        run: |
+          echo "=== Embedded file sizes ==="
+          find pkg/api/webui -type f -exec ls -lh {} \;
+          total=$(find pkg/api/webui -type f -exec cat {} \; | wc -c)
+          echo "Total embedded size: $((total / 1024)) KB"
+          if [ $total -gt 1048576 ]; then
+            echo "⚠️ WARNING: Total embed size exceeds 1MB"
+          fi
+
   build-matrix:
+    needs: [verify-webui-embed]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -125,6 +159,7 @@ jobs:
           echo "✅ ${{ matrix.goos }}/${{ matrix.goarch }} compiled OK"
 
   build-artifacts:
+    needs: [verify-webui-embed]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
