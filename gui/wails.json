@@ -1,0 +1,18 @@
+{
+  "name": "TLS-Client",
+  "outputfilename": "tls-client-gui",
+  "frontend:install": "",
+  "frontend:build": "",
+  "frontend:dev:watcher": "",
+  "frontend:dev:serverUrl": "",
+  "author": {
+    "name": "TLS-Client Team"
+  },
+  "info": {
+    "companyName": "TLS-Client",
+    "productName": "TLS-Client GUI",
+    "productVersion": "3.5.0",
+    "copyright": "MIT License",
+    "comments": "Anti-fingerprint proxy transport engine"
+  }
+}
