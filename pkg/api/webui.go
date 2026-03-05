@@ -1,9 +1,10 @@
+
 package api
 
 import "embed"
 
-// WebUIFS 嵌入 Web UI 静态文件
-// 编译时将 index.html 放在 pkg/api/webui/ 目录下
+// WebUIFS embeds all static files under the webui directory tree.
+// The go:embed directive recursively includes every file.
 //
-//go:embed webui/*
+//go:embed webui
 var WebUIFS embed.FS
