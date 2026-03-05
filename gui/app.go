@@ -209,6 +209,9 @@ func (a *App) StartLocalEngine(configPath string) error {
 	cmd := exec.Command(binary, "run", "-c", configPath)
 	cmd.Dir = filepath.Dir(binary)
 
+	// 【修复一】：隐藏 Windows 下的控制台黑框
+	hideWindow(cmd)
+
 	// 捕获输出
 	stdout, _ := cmd.StdoutPipe()
 	stderr, _ := cmd.StderrPipe()
@@ -242,6 +245,8 @@ func (a *App) StartLocalEngine(configPath string) error {
 				return
 			}
 		}
+		// 30 次都失败，通知前端超时
+		wailsRuntime.EventsEmit(a.ctx, "engine:timeout", nil)
 	}()
 
 	return nil
