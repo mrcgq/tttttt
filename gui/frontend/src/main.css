@@ -554,3 +554,38 @@ tr:hover td{background:var(--c-bg-2)}
   .page-container{padding:16px}
   .fp-grid{grid-template-columns:1fr}
 }
+
+/* 内容与 pkg/api/webui/css/main.css 完全相同，请直接复制 */
+/* 仅增加以下 Wails 专用样式 */
+
+/* Wails 窗口拖拽区域 */
+.topbar {
+  --wails-draggable: drag;
+  -webkit-app-region: drag;
+}
+.topbar button, .topbar input, .topbar select, .topbar a {
+  --wails-draggable: no-drag;
+  -webkit-app-region: no-drag;
+}
+
+/* 桌面端不需要移动端菜单按钮 */
+.mobile-menu-btn { display: none !important; }
+
+/* 桌面端滚动条美化 */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: var(--c-bg-0); }
+::-webkit-scrollbar-thumb { background: var(--c-bg-4); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--c-border-h); }
+
+/* 窗口控制区域保留 (macOS) */
+body.darwin .topbar { padding-left: 80px; }
+
+/* 桌面平台标识 */
+.topbar-platform {
+  font-size: 11px;
+  color: var(--c-text-3);
+  background: var(--c-bg-3);
+  padding: 2px 8px;
+  border-radius: 4px;
+  margin-left: 8px;
+}
