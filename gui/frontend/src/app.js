@@ -178,25 +178,90 @@ const App = {
       // 非 Wails 环境下忽略
     }
 
-    // 监听引擎事件
+    // ================================================================
+    // 【修复二】：引擎事件监听 + 自动轮询
+    // ================================================================
     if (window.runtime) {
+
+      // 引擎日志输出
       window.runtime.EventsOn('engine:log', (line) => {
         this.log('debug', line.trim());
       });
+
+      // 引擎已停止
       window.runtime.EventsOn('engine:stopped', () => {
         this.state.localEngineRunning = false;
+        this.state.engineRunning = false;
         this.toast('本地引擎已停止', 'warning');
         this.log('warn', '本地引擎已停止');
+
+        // 【关键】：同步前端 API 连接状态
+        API.connected = false;
+        API.stopPolling();
+        this.updateApiIndicator(false);
+
+        // 更新仪表盘 UI
+        const el = document.getElementById('dash-status');
+        if (el) {
+          el.textContent = '已停止';
+          el.className = 'stat-value red';
+        }
+        // 清零其他指标
+        const setZero = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
+        setZero('dash-uptime', '—');
+        setZero('dash-conns', '0');
+        setZero('dash-bytes', '0 B');
+        setZero('dash-goroutines', '0');
+        setZero('dash-mem', '0 MB');
       });
-      window.runtime.EventsOn('engine:ready', () => {
+
+      // 引擎已就绪 — API 可用
+      window.runtime.EventsOn('engine:ready', async () => {
         this.state.localEngineRunning = true;
-        this.toast('本地引擎已就绪，API 已自动连接', 'success');
-        this.log('info', '本地引擎已就绪');
+        this.state.engineRunning = true;
+        this.toast('本地引擎已就绪，数据已连接', 'success');
+        this.log('info', '本地引擎已就绪，API 连接成功');
+
+        // 【关键】：同步前端 API 连接状态为 true
+        API.connected = true;
         this.updateApiIndicator(true);
+
+        // 立刻获取一次状态，替换 "启动中..."
+        try {
+          const data = await API.getStatus();
+          if (DashboardPage && DashboardPage.updateFromAPI) {
+            DashboardPage.updateFromAPI(data);
+          }
+        } catch (e) {
+          this.log('error', '获取初始状态失败: ' + e);
+        }
+
+        // 启动定时轮询：每 2 秒拉取一次最新数据
+        API.startPolling((data, err) => {
+          if (data) {
+            if (DashboardPage && DashboardPage.updateFromAPI) {
+              DashboardPage.updateFromAPI(data);
+            }
+          }
+          if (err) {
+            this.log('error', 'API 轮询错误: ' + err);
+          }
+        }, 2000);
+      });
+
+      // 引擎启动超时
+      window.runtime.EventsOn('engine:timeout', () => {
+        this.toast('引擎启动超时，API 未响应', 'error');
+        this.log('error', '引擎启动超时（15秒内未检测到 API）');
+        const el = document.getElementById('dash-status');
+        if (el) {
+          el.textContent = '超时';
+          el.className = 'stat-value red';
+        }
       });
     }
 
-    // 渲染
+    // 渲染首页
     this.navigate(this.currentPage);
     this.log('info', 'TLS-Client 桌面版 v3.5 已加载');
     this.log('info', `${this.state.fingerprints.length} 个指纹, ${this.state.nodes.length} 个节点`);
