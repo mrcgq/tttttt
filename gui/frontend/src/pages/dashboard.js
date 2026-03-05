@@ -21,7 +21,7 @@ const DashboardPage = {
 </div>
 
 <div class="stats-row">
-  <div class="stat-card"><div class="stat-label">引擎状态</div><div class="stat-value green" id="dash-status">待机</div></div>
+  <div class="stat-card"><div class="stat-label">引擎状态</div><div class="stat-value" id="dash-status">${App.state.localEngineRunning ? '<span class="green">运行中</span>' : '待机'}</div></div>
   <div class="stat-card"><div class="stat-label">运行时间</div><div class="stat-value blue" id="dash-uptime">—</div></div>
   <div class="stat-card"><div class="stat-label">活跃连接</div><div class="stat-value purple" id="dash-conns">0</div></div>
   <div class="stat-card"><div class="stat-label">总流量</div><div class="stat-value" id="dash-bytes">0 B</div></div>
@@ -123,21 +123,42 @@ const DashboardPage = {
     } catch (e) { App.toast('重载失败: ' + e, 'error'); }
   },
 
+  /**
+   * 【修复二核心】：根据 API 返回数据更新仪表盘所有字段
+   */
   updateFromAPI(data) {
     if (!data) return;
     const set = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
+
+    // 引擎状态
     const el = document.getElementById('dash-status');
     if (el) {
-      el.textContent = data.engine_running ? '运行中' : '待机';
-      el.className = 'stat-value ' + (data.engine_running ? 'green' : 'yellow');
+      if (data.engine_running) {
+        el.textContent = '运行中';
+        el.className = 'stat-value green';
+      } else {
+        el.textContent = '待机';
+        el.className = 'stat-value yellow';
+      }
     }
-    set('dash-uptime', data.uptime_human || '—');
-    set('dash-conns', data.active_conns ?? 0);
+
+    // 基础指标
+    set('dash-uptime', data.uptime_human || data.uptime || '—');
+    set('dash-conns', data.active_conns ?? data.connections ?? 0);
     set('dash-bytes', App.formatBytes(data.total_bytes || 0));
     set('dash-goroutines', data.goroutines ?? 0);
-    if (data.memory) set('dash-mem', (data.memory.alloc_mb || 0) + ' MB');
+
+    // 内存
+    if (data.memory) {
+      set('dash-mem', (data.memory.alloc_mb || 0) + ' MB');
+    } else if (data.mem_alloc_mb !== undefined) {
+      set('dash-mem', data.mem_alloc_mb + ' MB');
+    }
+
+    // 当前配置
     if (data.current_profile) set('dash-fp', data.current_profile);
     if (data.current_node) set('dash-node', data.current_node);
+    if (data.transport) set('dash-transport', data.transport.toUpperCase());
   },
 
   async refreshMetrics() {
