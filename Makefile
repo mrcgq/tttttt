@@ -54,3 +54,23 @@ cross:
 docker:
 	docker build -t tls-client:$(VERSION) .
 	@echo "Built tls-client:$(VERSION)"
+
+
+
+# ============ GUI 客户端 ============
+
+gui-deps:
+	@echo ">>> Installing Wails CLI..."
+	go install github.com/wailsapp/wails/v2/cmd/wails@latest
+
+gui: gui-deps
+	@echo ">>> Building GUI client..."
+	cd gui && wails build
+	@echo "✅ GUI binary at gui/build/bin/"
+
+gui-dev: gui-deps
+	@echo ">>> Starting GUI dev mode..."
+	cd gui && wails dev
+
+gui-clean:
+	rm -rf gui/build/bin/
