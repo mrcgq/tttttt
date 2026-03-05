@@ -96,22 +96,30 @@ const API = {
     return window.go.main.App.GetSystemInfo();
   },
 
+  /**
+   * 启动定时轮询
+   * 【修复】：移除 connected 前置检查，改为在回调中处理错误
+   * 这样即使 connected 标志延迟同步，轮询也能正常工作
+   */
   startPolling(callback, interval = 5000) {
     this.stopPolling();
     const poll = async () => {
-      if (!this.connected) return;
       try {
         const data = await this.getStatus();
+        this.connected = true; // 能成功获取就说明已连接
         callback(data, null);
       } catch (err) {
         callback(null, err);
       }
     };
-    poll();
+    poll(); // 立刻执行一次
     this.pollTimer = setInterval(poll, interval);
   },
 
   stopPolling() {
-    if (this.pollTimer) { clearInterval(this.pollTimer); this.pollTimer = null; }
+    if (this.pollTimer) {
+      clearInterval(this.pollTimer);
+      this.pollTimer = null;
+    }
   }
 };
