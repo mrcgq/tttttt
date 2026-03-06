@@ -60,7 +60,6 @@ const NodesPage = {
         <input type="text" id="new-node-socks5out" placeholder="127.0.0.1:9050 (仅 socks5-out 模式)">
       </div>
     </div>
-
     <div class="section-title">🔗 Xlink 借力配置 (可选)</div>
     <div class="form-row">
       <div class="form-group">
@@ -74,7 +73,6 @@ const NodesPage = {
         <div class="hint">Worker 直连失败时的备用地址</div>
       </div>
     </div>
-
     <div class="section-title">🔁 重试与连接池</div>
     <div class="form-row">
       <div class="form-group">
@@ -123,6 +121,7 @@ const NodesPage = {
   <div class="card-header">
     <h3>📋 节点列表 <span class="badge badge-blue">${App.state.nodes.length}</span></h3>
     <div class="card-actions">
+      <button class="btn btn-sm btn-primary" onclick="NodesPage.syncFromEngine()">📡 从引擎同步</button>
       <button class="btn btn-sm btn-secondary" onclick="NodesPage.collapseAll()">全部折叠</button>
     </div>
   </div>
@@ -134,7 +133,7 @@ const NodesPage = {
 
   renderNodeList() {
     if (App.state.nodes.length === 0) {
-      return `<div class="empty-state"><h4>暂无节点</h4><p>请在上方添加第一个节点</p></div>`;
+      return `<div class="empty-state"><h4>暂无节点</h4><p>请在上方添加第一个节点，或点击"从引擎同步"获取现有配置</p></div>`;
     }
     return App.state.nodes.map((n, i) => this.renderNodeItem(n, i)).join('');
   },
@@ -142,6 +141,7 @@ const NodesPage = {
   renderNodeItem(node, index) {
     const isActive = node.active;
     const isEditing = this.editingNode === node.name;
+
     return `
 <div class="node-item ${isActive ? 'node-active' : ''} ${isEditing ? 'node-editing' : ''}" id="node-${index}">
   <div class="node-top">
@@ -182,6 +182,7 @@ const NodesPage = {
     const rp = node.remoteProxy || {};
     const retry = node.retry || {};
     const pool = node.pool || {};
+
     return `
 <div class="node-edit-form visible" id="node-edit-${index}">
   <div class="form-row">
@@ -285,17 +286,13 @@ const NodesPage = {
     <button class="btn btn-primary" onclick="NodesPage.saveEdit(${index})">💾 保存修改</button>
     <button class="btn btn-secondary" onclick="NodesPage.cancelEdit(${index})">取消</button>
   </div>
-  <div id="node-save-confirm-${index}" style="display:none">
-    <div class="confirm-bar">
-      <span>⚠️ 确认保存对节点 "${node.name}" 的修改？</span>
-      <button class="btn btn-xs btn-primary" onclick="NodesPage.confirmSave(${index})">确认保存</button>
-      <button class="btn btn-xs btn-secondary" onclick="NodesPage.cancelSaveConfirm(${index})">取消</button>
-    </div>
-  </div>
 </div>`;
   },
 
-  addNode() {
+  // ================================================================
+  // 添加节点
+  // ================================================================
+  async addNode() {
     const name = document.getElementById('new-node-name')?.value?.trim();
     const address = document.getElementById('new-node-address')?.value?.trim();
     const sni = document.getElementById('new-node-sni')?.value?.trim();
@@ -336,10 +333,19 @@ const NodesPage = {
     };
 
     App.state.nodes.push(node);
-    this.resetAddForm();
-    App.renderPage('nodes');
-    App.toast('节点已添加: ' + name, 'success');
-    App.log('info', '添加节点: ' + name);
+
+    // 推送配置到核心引擎
+    const success = await App.pushConfigToEngine();
+
+    if (success) {
+      this.resetAddForm();
+      App.renderPage('nodes');
+      App.log('info', '添加节点: ' + name);
+    } else {
+      // 回滚
+      App.state.nodes.pop();
+      App.toast('添加节点失败，已回滚', 'error');
+    }
   },
 
   resetAddForm() {
@@ -360,16 +366,13 @@ const NodesPage = {
     App.renderPage('nodes');
   },
 
-  saveEdit(index) {
-    document.getElementById(`node-save-confirm-${index}`).style.display = 'block';
-  },
-
-  cancelSaveConfirm(index) {
-    document.getElementById(`node-save-confirm-${index}`).style.display = 'none';
-  },
-
-  confirmSave(index) {
+  // ================================================================
+  // 保存编辑
+  // ================================================================
+  async saveEdit(index) {
     const node = App.state.nodes[index];
+    const oldNode = JSON.parse(JSON.stringify(node)); // 备份用于回滚
+
     const g = id => document.getElementById(id)?.value?.trim() || '';
 
     node.name = g(`edit-name-${index}`) || node.name;
@@ -399,17 +402,39 @@ const NodesPage = {
     node.pool.idleTimeout = g(`edit-pool-timeout-${index}`) || '120s';
     node.pool.maxLifetime = g(`edit-pool-life-${index}`) || '10m';
 
-    this.editingNode = null;
-    App.renderPage('nodes');
-    App.toast('节点已保存: ' + node.name, 'success');
-    App.log('info', '修改节点: ' + node.name);
+    // 推送配置到核心引擎
+    const success = await App.pushConfigToEngine();
+
+    if (success) {
+      this.editingNode = null;
+      App.renderPage('nodes');
+      App.log('info', '修改节点: ' + node.name);
+    } else {
+      // 回滚
+      App.state.nodes[index] = oldNode;
+      App.toast('保存失败，已回滚', 'error');
+    }
   },
 
-  activate(index) {
+  // ================================================================
+  // 激活节点
+  // ================================================================
+  async activate(index) {
+    const oldActiveIndex = App.state.nodes.findIndex(n => n.active);
+
     App.state.nodes.forEach((n, i) => n.active = (i === index));
-    App.renderPage('nodes');
-    App.toast('已激活: ' + App.state.nodes[index].name, 'success');
-    App.log('info', '激活节点: ' + App.state.nodes[index].name);
+
+    // 推送配置到核心引擎
+    const success = await App.pushConfigToEngine();
+
+    if (success) {
+      App.renderPage('nodes');
+      App.log('info', '激活节点: ' + App.state.nodes[index].name);
+    } else {
+      // 回滚
+      App.state.nodes.forEach((n, i) => n.active = (i === oldActiveIndex));
+      App.toast('激活失败，已回滚', 'error');
+    }
   },
 
   confirmDelete(index) {
@@ -420,16 +445,46 @@ const NodesPage = {
     document.getElementById(`node-delete-confirm-${index}`).style.display = 'none';
   },
 
-  deleteNode(index) {
+  // ================================================================
+  // 删除节点
+  // ================================================================
+  async deleteNode(index) {
     const name = App.state.nodes[index].name;
-    App.state.nodes.splice(index, 1);
-    App.renderPage('nodes');
-    App.toast('节点已删除: ' + name, 'info');
-    App.log('warn', '删除节点: ' + name);
+    const deletedNode = App.state.nodes.splice(index, 1)[0];
+
+    // 推送配置到核心引擎
+    const success = await App.pushConfigToEngine();
+
+    if (success) {
+      App.renderPage('nodes');
+      App.log('warn', '删除节点: ' + name);
+    } else {
+      // 回滚
+      App.state.nodes.splice(index, 0, deletedNode);
+      App.toast('删除失败，已回滚', 'error');
+    }
   },
 
   collapseAll() {
     this.editingNode = null;
     App.renderPage('nodes');
+  },
+
+  // ================================================================
+  // 从核心引擎同步节点
+  // ================================================================
+  async syncFromEngine() {
+    if (!API.connected) {
+      App.toast('请先连接到引擎 API', 'warning');
+      return;
+    }
+
+    try {
+      await App.fetchAndApplyConfig();
+      App.renderPage('nodes');
+      App.toast('已从引擎同步 ' + App.state.nodes.length + ' 个节点', 'success');
+    } catch (e) {
+      App.toast('同步失败: ' + e, 'error');
+    }
   }
 };
