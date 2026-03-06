@@ -29,7 +29,7 @@ const NodesPage = {
       </div>
       <div class="form-group">
         <label>传输协议</label>
-        <select id="new-node-transport" onchange="NodesPage.onTransportChange('new')">
+        <select id="new-node-transport">
           <option value="ws">WebSocket (推荐)</option>
           <option value="h2">HTTP/2</option>
           <option value="raw">Raw TCP</option>
@@ -64,15 +64,15 @@ const NodesPage = {
     <div class="form-row">
       <div class="form-group">
         <label>SOCKS5-Out 代理地址</label>
-        <input type="text" id="new-node-socks5out" placeholder="127.0.0.1:9050 (仅 socks5-out 模式)">
+        <input type="text" id="new-node-socks5out" placeholder="127.0.0.1:9050">
       </div>
       <div class="form-group">
         <label>SOCKS5-Out 用户名</label>
-        <input type="text" id="new-node-socks5out-user" placeholder="可选认证用户名">
+        <input type="text" id="new-node-socks5out-user" placeholder="可选">
       </div>
       <div class="form-group">
         <label>SOCKS5-Out 密码</label>
-        <input type="password" id="new-node-socks5out-pass" placeholder="可选认证密码">
+        <input type="password" id="new-node-socks5out-pass" placeholder="可选">
       </div>
     </div>
     <div class="section-title">🔗 Xlink 借力配置 (可选)</div>
@@ -93,7 +93,7 @@ const NodesPage = {
       <div class="form-group" style="flex:1">
         <label>Fallback 协议列表</label>
         <input type="text" id="new-node-transport-fallback" placeholder="ws,h2,raw (逗号分隔)">
-        <div class="hint">当主传输协议失败时尝试的备用协议，按顺序使用</div>
+        <div class="hint">当主传输协议失败时尝试的备用协议</div>
       </div>
     </div>
     <div class="section-title">🔁 重试与连接池</div>
@@ -291,7 +291,7 @@ const NodesPage = {
   <div class="form-row">
     <div class="form-group" style="flex:1">
       <label>Fallback 协议列表</label>
-      <input type="text" id="edit-tfb-${index}" value="${fallback.join(',')}" placeholder="ws,h2,raw (逗号分隔)">
+      <input type="text" id="edit-tfb-${index}" value="${fallback.join(',')}" placeholder="ws,h2,raw">
     </div>
   </div>
   <div class="section-title">🔁 重试</div>
@@ -339,14 +339,6 @@ const NodesPage = {
 </div>`;
   },
 
-  // 传输协议切换提示（可选扩展）
-  onTransportChange(prefix) {
-    // 未来可根据选中的传输协议显示/隐藏相关字段
-  },
-
-  // ================================================================
-  // 添加节点
-  // ================================================================
   async addNode() {
     const name = document.getElementById('new-node-name')?.value?.trim();
     const address = document.getElementById('new-node-address')?.value?.trim();
@@ -357,7 +349,6 @@ const NodesPage = {
     if (!sni) { App.toast('SNI 不能为空', 'error'); return; }
     if (App.state.nodes.find(n => n.name === name)) { App.toast('节点名称已存在', 'error'); return; }
 
-    // 解析 transport fallback
     const tfbStr = document.getElementById('new-node-transport-fallback')?.value?.trim() || '';
     const transportFallback = tfbStr ? tfbStr.split(',').map(s => s.trim()).filter(s => s) : [];
 
@@ -398,7 +389,6 @@ const NodesPage = {
 
     App.state.nodes.push(node);
 
-    // 推送配置到核心引擎
     const success = await App.pushConfigToEngine();
 
     if (success) {
@@ -406,7 +396,6 @@ const NodesPage = {
       App.renderPage('nodes');
       App.log('info', '添加节点: ' + name);
     } else {
-      // 回滚
       App.state.nodes.pop();
       App.toast('添加节点失败，已回滚', 'error');
     }
@@ -431,12 +420,9 @@ const NodesPage = {
     App.renderPage('nodes');
   },
 
-  // ================================================================
-  // 保存编辑
-  // ================================================================
   async saveEdit(index) {
     const node = App.state.nodes[index];
-    const oldNode = JSON.parse(JSON.stringify(node)); // 备份用于回滚
+    const oldNode = JSON.parse(JSON.stringify(node));
 
     const g = id => document.getElementById(id)?.value?.trim() || '';
 
@@ -458,7 +444,6 @@ const NodesPage = {
     node.remoteProxy.socks5 = g(`edit-rs5-${index}`);
     node.remoteProxy.fallback = g(`edit-rfb-${index}`);
 
-    // 解析 transport fallback
     const tfbStr = g(`edit-tfb-${index}`);
     node.transportFallback = tfbStr ? tfbStr.split(',').map(s => s.trim()).filter(s => s) : [];
 
@@ -474,7 +459,6 @@ const NodesPage = {
     node.pool.idleTimeout = g(`edit-pool-timeout-${index}`) || '120s';
     node.pool.maxLifetime = g(`edit-pool-life-${index}`) || '10m';
 
-    // 推送配置到核心引擎
     const success = await App.pushConfigToEngine();
 
     if (success) {
@@ -482,28 +466,22 @@ const NodesPage = {
       App.renderPage('nodes');
       App.log('info', '修改节点: ' + node.name);
     } else {
-      // 回滚
       App.state.nodes[index] = oldNode;
       App.toast('保存失败，已回滚', 'error');
     }
   },
 
-  // ================================================================
-  // 激活节点
-  // ================================================================
   async activate(index) {
     const oldActiveIndex = App.state.nodes.findIndex(n => n.active);
 
     App.state.nodes.forEach((n, i) => n.active = (i === index));
 
-    // 推送配置到核心引擎
     const success = await App.pushConfigToEngine();
 
     if (success) {
       App.renderPage('nodes');
       App.log('info', '激活节点: ' + App.state.nodes[index].name);
     } else {
-      // 回滚
       App.state.nodes.forEach((n, i) => n.active = (i === oldActiveIndex));
       App.toast('激活失败，已回滚', 'error');
     }
@@ -517,21 +495,16 @@ const NodesPage = {
     document.getElementById(`node-delete-confirm-${index}`).style.display = 'none';
   },
 
-  // ================================================================
-  // 删除节点
-  // ================================================================
   async deleteNode(index) {
     const name = App.state.nodes[index].name;
     const deletedNode = App.state.nodes.splice(index, 1)[0];
 
-    // 推送配置到核心引擎
     const success = await App.pushConfigToEngine();
 
     if (success) {
       App.renderPage('nodes');
       App.log('warn', '删除节点: ' + name);
     } else {
-      // 回滚
       App.state.nodes.splice(index, 0, deletedNode);
       App.toast('删除失败，已回滚', 'error');
     }
@@ -542,9 +515,6 @@ const NodesPage = {
     App.renderPage('nodes');
   },
 
-  // ================================================================
-  // 从核心引擎同步节点
-  // ================================================================
   async syncFromEngine() {
     if (!API.connected) {
       App.toast('请先连接到引擎 API', 'warning');
