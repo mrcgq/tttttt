@@ -496,10 +496,18 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// configToJSON 将 config.Config 转换为 JSON 友好的 map
+// ================================================================
+// configToJSON 将 config.Config 转换为 JSON 友好的 map（完整版）
+// ================================================================
 func configToJSON(cfg *config.Config) map[string]any {
 	nodes := make([]map[string]any, 0, len(cfg.Nodes))
 	for _, n := range cfg.Nodes {
+		// 构建 ws_headers
+		wsHeaders := n.TransportOpts.WSHeaders
+		if wsHeaders == nil {
+			wsHeaders = make(map[string]string)
+		}
+
 		node := map[string]any{
 			"name":        n.Name,
 			"address":     n.Address,
@@ -508,11 +516,15 @@ func configToJSON(cfg *config.Config) map[string]any {
 			"fingerprint": n.Fingerprint,
 			"active":      n.Active,
 			"transport_opts": map[string]any{
-				"ws_path":     n.TransportOpts.WSPath,
-				"ws_host":     n.TransportOpts.WSHost,
-				"ws_headers":  n.TransportOpts.WSHeaders,
-				"socks5_addr": n.TransportOpts.SOCKS5Addr,
+				"ws_path":         n.TransportOpts.WSPath,
+				"ws_host":         n.TransportOpts.WSHost,
+				"ws_headers":      wsHeaders,
+				"h2_path":         n.TransportOpts.H2Path,
+				"socks5_addr":     n.TransportOpts.SOCKS5Addr,
+				"socks5_username": n.TransportOpts.SOCKS5Username,
+				"socks5_password": n.TransportOpts.SOCKS5Password,
 			},
+			"transport_fallback": n.Fallback,
 			"remote_proxy": map[string]any{
 				"socks5":   n.RemoteProxy.SOCKS5,
 				"fallback": n.RemoteProxy.Fallback,
@@ -533,10 +545,32 @@ func configToJSON(cfg *config.Config) map[string]any {
 		nodes = append(nodes, node)
 	}
 
+	// 构建 proxy_ips entries
+	proxyIPEntries := make([]map[string]any, 0, len(cfg.ProxyIPs.Entries))
+	for _, e := range cfg.ProxyIPs.Entries {
+		proxyIPEntries = append(proxyIPEntries, map[string]any{
+			"address": e.Address,
+			"sni":     e.SNI,
+			"weight":  e.Weight,
+			"enabled": e.Enabled,
+			"tag":     e.Tag,
+		})
+	}
+
+	// 构建 fingerprint rotation weights
+	fpWeights := cfg.Fingerprint.Rotation.Weights
+	if fpWeights == nil {
+		fpWeights = make(map[string]int)
+	}
+
 	return map[string]any{
 		"global": map[string]any{
 			"log_level":  cfg.Global.LogLevel,
 			"log_output": cfg.Global.LogOutput,
+			"metrics": map[string]any{
+				"enabled":  cfg.Global.Metrics.Enabled,
+				"endpoint": cfg.Global.Metrics.Endpoint,
+			},
 		},
 		"inbound": map[string]any{
 			"socks5": map[string]any{
@@ -554,10 +588,15 @@ func configToJSON(cfg *config.Config) map[string]any {
 				"profile":  cfg.Fingerprint.Rotation.Profile,
 				"profiles": cfg.Fingerprint.Rotation.Profiles,
 				"interval": cfg.Fingerprint.Rotation.Interval,
+				"weights":  fpWeights,
 			},
 		},
 		"tls": map[string]any{
 			"verify_mode": cfg.TLS.VerifyMode,
+			"verify_opts": map[string]any{
+				"cert_pin":  cfg.TLS.VerifyOpts.CertPin,
+				"custom_ca": cfg.TLS.VerifyOpts.CustomCA,
+			},
 		},
 		"client_behavior": map[string]any{
 			"cadence": map[string]any{
@@ -565,6 +604,7 @@ func configToJSON(cfg *config.Config) map[string]any {
 				"min_delay": cfg.ClientBehavior.Cadence.MinDelay,
 				"max_delay": cfg.ClientBehavior.Cadence.MaxDelay,
 				"jitter":    cfg.ClientBehavior.Cadence.Jitter,
+				"sequence":  cfg.ClientBehavior.Cadence.Sequence,
 			},
 			"cookies": map[string]any{
 				"enabled":           cfg.ClientBehavior.Cookies.Enabled,
@@ -576,6 +616,7 @@ func configToJSON(cfg *config.Config) map[string]any {
 		"api": map[string]any{
 			"enabled": cfg.API.Enabled,
 			"listen":  cfg.API.Listen,
+			"token":   cfg.API.Token,
 		},
 		"health": map[string]any{
 			"enabled":     cfg.Health.Enabled,
@@ -583,16 +624,31 @@ func configToJSON(cfg *config.Config) map[string]any {
 			"timeout":     cfg.Health.Timeout,
 			"threshold":   cfg.Health.Threshold,
 			"degraded_ms": cfg.Health.DegradedMs,
+			"test_url":    cfg.Health.TestURL,
+		},
+		"proxy_ips": map[string]any{
+			"enabled": cfg.ProxyIPs.Enabled,
+			"mode":    cfg.ProxyIPs.Mode,
+			"options": map[string]any{
+				"health_check_interval": cfg.ProxyIPs.Options.HealthCheckInterval,
+				"max_fail_count":        cfg.ProxyIPs.Options.MaxFailCount,
+				"recovery_time":         cfg.ProxyIPs.Options.RecoveryTime,
+			},
+			"entries": proxyIPEntries,
 		},
 		"nodes": nodes,
 	}
 }
 
-// jsonToConfig 将 JSON map 转换为 config.Config
+// ================================================================
+// jsonToConfig 将 JSON map 转换为 config.Config（完整版）
+// ================================================================
 func jsonToConfig(data map[string]any) (*config.Config, error) {
 	cfg := &config.Config{}
 
+	// ----------------------------------------------------------------
 	// 解析 global
+	// ----------------------------------------------------------------
 	if global, ok := data["global"].(map[string]any); ok {
 		if v, ok := global["log_level"].(string); ok {
 			cfg.Global.LogLevel = v
@@ -600,9 +656,20 @@ func jsonToConfig(data map[string]any) (*config.Config, error) {
 		if v, ok := global["log_output"].(string); ok {
 			cfg.Global.LogOutput = v
 		}
+		// 解析 metrics
+		if metrics, ok := global["metrics"].(map[string]any); ok {
+			if v, ok := metrics["enabled"].(bool); ok {
+				cfg.Global.Metrics.Enabled = v
+			}
+			if v, ok := metrics["endpoint"].(string); ok {
+				cfg.Global.Metrics.Endpoint = v
+			}
+		}
 	}
 
+	// ----------------------------------------------------------------
 	// 解析 inbound
+	// ----------------------------------------------------------------
 	if inbound, ok := data["inbound"].(map[string]any); ok {
 		if socks5, ok := inbound["socks5"].(map[string]any); ok {
 			if v, ok := socks5["listen"].(string); ok {
@@ -622,7 +689,9 @@ func jsonToConfig(data map[string]any) (*config.Config, error) {
 		}
 	}
 
+	// ----------------------------------------------------------------
 	// 解析 fingerprint
+	// ----------------------------------------------------------------
 	if fp, ok := data["fingerprint"].(map[string]any); ok {
 		if rotation, ok := fp["rotation"].(map[string]any); ok {
 			if v, ok := rotation["mode"].(string); ok {
@@ -632,6 +701,7 @@ func jsonToConfig(data map[string]any) (*config.Config, error) {
 				cfg.Fingerprint.Rotation.Profile = v
 			}
 			if v, ok := rotation["profiles"].([]any); ok {
+				cfg.Fingerprint.Rotation.Profiles = nil
 				for _, p := range v {
 					if s, ok := p.(string); ok {
 						cfg.Fingerprint.Rotation.Profiles = append(cfg.Fingerprint.Rotation.Profiles, s)
@@ -641,17 +711,39 @@ func jsonToConfig(data map[string]any) (*config.Config, error) {
 			if v, ok := rotation["interval"].(string); ok {
 				cfg.Fingerprint.Rotation.Interval = v
 			}
+			// 解析 weights
+			if weights, ok := rotation["weights"].(map[string]any); ok {
+				cfg.Fingerprint.Rotation.Weights = make(map[string]int)
+				for k, v := range weights {
+					if f, ok := v.(float64); ok {
+						cfg.Fingerprint.Rotation.Weights[k] = int(f)
+					}
+				}
+			}
 		}
 	}
 
+	// ----------------------------------------------------------------
 	// 解析 tls
+	// ----------------------------------------------------------------
 	if tlsCfg, ok := data["tls"].(map[string]any); ok {
 		if v, ok := tlsCfg["verify_mode"].(string); ok {
 			cfg.TLS.VerifyMode = v
 		}
+		// 解析 verify_opts
+		if opts, ok := tlsCfg["verify_opts"].(map[string]any); ok {
+			if v, ok := opts["cert_pin"].(string); ok {
+				cfg.TLS.VerifyOpts.CertPin = v
+			}
+			if v, ok := opts["custom_ca"].(string); ok {
+				cfg.TLS.VerifyOpts.CustomCA = v
+			}
+		}
 	}
 
+	// ----------------------------------------------------------------
 	// 解析 client_behavior
+	// ----------------------------------------------------------------
 	if cb, ok := data["client_behavior"].(map[string]any); ok {
 		if cadence, ok := cb["cadence"].(map[string]any); ok {
 			if v, ok := cadence["mode"].(string); ok {
@@ -665,6 +757,15 @@ func jsonToConfig(data map[string]any) (*config.Config, error) {
 			}
 			if v, ok := cadence["jitter"].(float64); ok {
 				cfg.ClientBehavior.Cadence.Jitter = v
+			}
+			// 解析 sequence
+			if seq, ok := cadence["sequence"].([]any); ok {
+				cfg.ClientBehavior.Cadence.Sequence = nil
+				for _, item := range seq {
+					if s, ok := item.(string); ok {
+						cfg.ClientBehavior.Cadence.Sequence = append(cfg.ClientBehavior.Cadence.Sequence, s)
+					}
+				}
 			}
 		}
 		if cookies, ok := cb["cookies"].(map[string]any); ok {
@@ -683,7 +784,9 @@ func jsonToConfig(data map[string]any) (*config.Config, error) {
 		}
 	}
 
+	// ----------------------------------------------------------------
 	// 解析 api
+	// ----------------------------------------------------------------
 	if apiCfg, ok := data["api"].(map[string]any); ok {
 		if v, ok := apiCfg["enabled"].(bool); ok {
 			cfg.API.Enabled = v
@@ -691,9 +794,14 @@ func jsonToConfig(data map[string]any) (*config.Config, error) {
 		if v, ok := apiCfg["listen"].(string); ok {
 			cfg.API.Listen = v
 		}
+		if v, ok := apiCfg["token"].(string); ok {
+			cfg.API.Token = v
+		}
 	}
 
+	// ----------------------------------------------------------------
 	// 解析 health
+	// ----------------------------------------------------------------
 	if healthCfg, ok := data["health"].(map[string]any); ok {
 		if v, ok := healthCfg["enabled"].(bool); ok {
 			cfg.Health.Enabled = v
@@ -710,10 +818,65 @@ func jsonToConfig(data map[string]any) (*config.Config, error) {
 		if v, ok := healthCfg["degraded_ms"].(float64); ok {
 			cfg.Health.DegradedMs = int64(v)
 		}
+		if v, ok := healthCfg["test_url"].(string); ok {
+			cfg.Health.TestURL = v
+		}
 	}
 
+	// ----------------------------------------------------------------
+	// 解析 proxy_ips
+	// ----------------------------------------------------------------
+	if proxyIPs, ok := data["proxy_ips"].(map[string]any); ok {
+		if v, ok := proxyIPs["enabled"].(bool); ok {
+			cfg.ProxyIPs.Enabled = v
+		}
+		if v, ok := proxyIPs["mode"].(string); ok {
+			cfg.ProxyIPs.Mode = v
+		}
+		// 解析 options
+		if options, ok := proxyIPs["options"].(map[string]any); ok {
+			if v, ok := options["health_check_interval"].(string); ok {
+				cfg.ProxyIPs.Options.HealthCheckInterval = v
+			}
+			if v, ok := options["max_fail_count"].(float64); ok {
+				cfg.ProxyIPs.Options.MaxFailCount = int(v)
+			}
+			if v, ok := options["recovery_time"].(string); ok {
+				cfg.ProxyIPs.Options.RecoveryTime = v
+			}
+		}
+		// 解析 entries
+		if entries, ok := proxyIPs["entries"].([]any); ok {
+			cfg.ProxyIPs.Entries = nil
+			for _, item := range entries {
+				if entryMap, ok := item.(map[string]any); ok {
+					entry := config.ProxyIPEntry{}
+					if v, ok := entryMap["address"].(string); ok {
+						entry.Address = v
+					}
+					if v, ok := entryMap["sni"].(string); ok {
+						entry.SNI = v
+					}
+					if v, ok := entryMap["weight"].(float64); ok {
+						entry.Weight = int(v)
+					}
+					if v, ok := entryMap["enabled"].(bool); ok {
+						entry.Enabled = v
+					}
+					if v, ok := entryMap["tag"].(string); ok {
+						entry.Tag = v
+					}
+					cfg.ProxyIPs.Entries = append(cfg.ProxyIPs.Entries, entry)
+				}
+			}
+		}
+	}
+
+	// ----------------------------------------------------------------
 	// 解析 nodes
+	// ----------------------------------------------------------------
 	if nodes, ok := data["nodes"].([]any); ok {
+		cfg.Nodes = nil
 		for _, n := range nodes {
 			if nodeMap, ok := n.(map[string]any); ok {
 				node := config.NodeConfig{}
@@ -737,7 +900,7 @@ func jsonToConfig(data map[string]any) (*config.Config, error) {
 					node.Active = v
 				}
 
-				// transport_opts
+				// transport_opts — 完整解析
 				if opts, ok := nodeMap["transport_opts"].(map[string]any); ok {
 					if v, ok := opts["ws_path"].(string); ok {
 						node.TransportOpts.WSPath = v
@@ -745,15 +908,35 @@ func jsonToConfig(data map[string]any) (*config.Config, error) {
 					if v, ok := opts["ws_host"].(string); ok {
 						node.TransportOpts.WSHost = v
 					}
+					if v, ok := opts["h2_path"].(string); ok {
+						node.TransportOpts.H2Path = v
+					}
 					if v, ok := opts["socks5_addr"].(string); ok {
 						node.TransportOpts.SOCKS5Addr = v
 					}
+					if v, ok := opts["socks5_username"].(string); ok {
+						node.TransportOpts.SOCKS5Username = v
+					}
+					if v, ok := opts["socks5_password"].(string); ok {
+						node.TransportOpts.SOCKS5Password = v
+					}
+					// ws_headers
 					if headers, ok := opts["ws_headers"].(map[string]any); ok {
 						node.TransportOpts.WSHeaders = make(map[string]string)
 						for k, v := range headers {
 							if s, ok := v.(string); ok {
 								node.TransportOpts.WSHeaders[k] = s
 							}
+						}
+					}
+				}
+
+				// transport_fallback
+				if fallback, ok := nodeMap["transport_fallback"].([]any); ok {
+					node.Fallback = nil
+					for _, fb := range fallback {
+						if s, ok := fb.(string); ok {
+							node.Fallback = append(node.Fallback, s)
 						}
 					}
 				}
