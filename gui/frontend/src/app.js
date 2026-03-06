@@ -1,6 +1,6 @@
 /**
  * TLS-Client GUI 桌面版主应用
- * 版本: v4.1 - 支持完整的配置同步和热重载
+ * 版本: v4.2 - 修复完整配置同步和字段映射
  */
 const App = {
   currentPage: 'dashboard',
@@ -9,7 +9,11 @@ const App = {
     localEngineRunning: false,
     selectedFingerprint: 'chrome-126-win',
     rotationMode: 'fixed',
+    rotationInterval: '',
+    rotationWeights: {},
     tlsVerifyMode: 'sni-skip',
+    tlsCertPin: '',
+    tlsCustomCA: '',
     cadenceMode: 'browsing',
     cadenceJitter: 0.3,
     cadenceMin: '',
@@ -26,6 +30,18 @@ const App = {
     transportFallback: 'ws,h2,raw',
     apiAddress: 'http://127.0.0.1:9090',
     apiToken: '',
+    // ProxyIP 池
+    proxyIPEnabled: false,
+    proxyIPMode: 'round-robin',
+    proxyIPOptions: {
+      healthCheckInterval: '30s',
+      maxFailCount: 3,
+      recoveryTime: '5m',
+    },
+    proxyIPEntries: [],
+    // Metrics
+    metricsEnabled: false,
+    metricsEndpoint: '',
     logs: [],
     nodes: [],
     fingerprints: [
@@ -154,7 +170,9 @@ const App = {
       const fullConfig = await API.getConfig();
       if (!fullConfig) return;
 
+      // ----------------------------------------------------------------
       // 同步节点列表
+      // ----------------------------------------------------------------
       if (fullConfig.nodes && Array.isArray(fullConfig.nodes)) {
         this.state.nodes = fullConfig.nodes.map(n => ({
           name: n.name || '',
@@ -166,7 +184,10 @@ const App = {
           transportOpts: {
             wsPath: n.transport_opts?.ws_path || '/',
             wsHost: n.transport_opts?.ws_host || '',
+            h2Path: n.transport_opts?.h2_path || '',
             socks5Addr: n.transport_opts?.socks5_addr || '',
+            socks5Username: n.transport_opts?.socks5_username || '',
+            socks5Password: n.transport_opts?.socks5_password || '',
             wsHeaders: n.transport_opts?.ws_headers || {},
           },
           remoteProxy: {
@@ -190,7 +211,9 @@ const App = {
         console.log('App.state.nodes updated:', this.state.nodes);
       }
 
+      // ----------------------------------------------------------------
       // 同步入站配置
+      // ----------------------------------------------------------------
       if (fullConfig.inbound) {
         if (fullConfig.inbound.socks5) {
           this.state.socks5Listen = fullConfig.inbound.socks5.listen || '127.0.0.1:1080';
@@ -202,25 +225,39 @@ const App = {
         }
       }
 
+      // ----------------------------------------------------------------
       // 同步指纹配置
+      // ----------------------------------------------------------------
       if (fullConfig.fingerprint?.rotation) {
         this.state.rotationMode = fullConfig.fingerprint.rotation.mode || 'fixed';
         this.state.selectedFingerprint = fullConfig.fingerprint.rotation.profile || 'chrome-126-win';
+        this.state.rotationInterval = fullConfig.fingerprint.rotation.interval || '';
+        if (fullConfig.fingerprint.rotation.weights) {
+          this.state.rotationWeights = fullConfig.fingerprint.rotation.weights;
+        }
       }
 
+      // ----------------------------------------------------------------
       // 同步 TLS 配置
+      // ----------------------------------------------------------------
       if (fullConfig.tls) {
         this.state.tlsVerifyMode = fullConfig.tls.verify_mode || 'sni-skip';
+        if (fullConfig.tls.verify_opts) {
+          this.state.tlsCertPin = fullConfig.tls.verify_opts.cert_pin || '';
+          this.state.tlsCustomCA = fullConfig.tls.verify_opts.custom_ca || '';
+        }
       }
 
+      // ----------------------------------------------------------------
       // 同步客户端行为配置
+      // ----------------------------------------------------------------
       if (fullConfig.client_behavior) {
         if (fullConfig.client_behavior.cadence) {
           this.state.cadenceMode = fullConfig.client_behavior.cadence.mode || 'none';
           this.state.cadenceJitter = fullConfig.client_behavior.cadence.jitter || 0.3;
           this.state.cadenceMin = fullConfig.client_behavior.cadence.min_delay || '';
           this.state.cadenceMax = fullConfig.client_behavior.cadence.max_delay || '';
-          if (fullConfig.client_behavior.cadence.sequence) {
+          if (fullConfig.client_behavior.cadence.sequence && Array.isArray(fullConfig.client_behavior.cadence.sequence)) {
             this.state.cadenceSeq = fullConfig.client_behavior.cadence.sequence.join(',');
           }
         }
@@ -232,7 +269,41 @@ const App = {
         this.state.maxRedirects = fullConfig.client_behavior.max_redirects || 10;
       }
 
+      // ----------------------------------------------------------------
+      // 同步 Global 配置
+      // ----------------------------------------------------------------
+      if (fullConfig.global?.metrics) {
+        this.state.metricsEnabled = fullConfig.global.metrics.enabled || false;
+        this.state.metricsEndpoint = fullConfig.global.metrics.endpoint || '';
+      }
+
+      // ----------------------------------------------------------------
+      // 同步 ProxyIP 配置
+      // ----------------------------------------------------------------
+      if (fullConfig.proxy_ips) {
+        this.state.proxyIPEnabled = fullConfig.proxy_ips.enabled || false;
+        this.state.proxyIPMode = fullConfig.proxy_ips.mode || 'round-robin';
+        if (fullConfig.proxy_ips.options) {
+          this.state.proxyIPOptions = {
+            healthCheckInterval: fullConfig.proxy_ips.options.health_check_interval || '30s',
+            maxFailCount: fullConfig.proxy_ips.options.max_fail_count || 3,
+            recoveryTime: fullConfig.proxy_ips.options.recovery_time || '5m',
+          };
+        }
+        if (fullConfig.proxy_ips.entries && Array.isArray(fullConfig.proxy_ips.entries)) {
+          this.state.proxyIPEntries = fullConfig.proxy_ips.entries.map(e => ({
+            address: e.address || '',
+            sni: e.sni || '',
+            weight: e.weight || 1,
+            enabled: e.enabled !== false,
+            tag: e.tag || '',
+          }));
+        }
+      }
+
+      // ----------------------------------------------------------------
       // 同步当前活跃配置
+      // ----------------------------------------------------------------
       if (fullConfig.current_profile) {
         this.state.selectedFingerprint = fullConfig.current_profile;
       }
@@ -251,7 +322,7 @@ const App = {
   },
 
   // ================================================================
-  // 构建完整配置对象用于发送到核心引擎
+  // 构建完整配置对象用于发送到核心引擎（完整版）
   // ================================================================
   buildFullConfig() {
     const s = this.state;
@@ -266,6 +337,10 @@ const App = {
       global: {
         log_level: "debug",
         log_output: "stderr",
+        metrics: {
+          enabled: s.metricsEnabled,
+          endpoint: s.metricsEndpoint,
+        },
       },
       inbound: {
         socks5: {
@@ -282,10 +357,16 @@ const App = {
           mode: s.rotationMode,
           profile: s.selectedFingerprint,
           profiles: s.fingerprints.map(f => f.name),
+          interval: s.rotationInterval,
+          weights: s.rotationWeights || {},
         },
       },
       tls: {
         verify_mode: s.tlsVerifyMode,
+        verify_opts: {
+          cert_pin: s.tlsCertPin || '',
+          custom_ca: s.tlsCustomCA || '',
+        },
       },
       client_behavior: {
         cadence: {
@@ -309,6 +390,22 @@ const App = {
       health: {
         enabled: false,
       },
+      proxy_ips: {
+        enabled: s.proxyIPEnabled,
+        mode: s.proxyIPMode,
+        options: {
+          health_check_interval: s.proxyIPOptions?.healthCheckInterval || '30s',
+          max_fail_count: s.proxyIPOptions?.maxFailCount || 3,
+          recovery_time: s.proxyIPOptions?.recoveryTime || '5m',
+        },
+        entries: (s.proxyIPEntries || []).map(e => ({
+          address: e.address,
+          sni: e.sni || '',
+          weight: e.weight || 1,
+          enabled: e.enabled !== false,
+          tag: e.tag || '',
+        })),
+      },
       nodes: s.nodes.map(n => ({
         name: n.name,
         address: n.address,
@@ -320,7 +417,10 @@ const App = {
           ws_path: n.transportOpts?.wsPath || '/',
           ws_host: n.transportOpts?.wsHost || '',
           ws_headers: n.transportOpts?.wsHeaders || {},
+          h2_path: n.transportOpts?.h2Path || '',
           socks5_addr: n.transportOpts?.socks5Addr || '',
+          socks5_username: n.transportOpts?.socks5Username || '',
+          socks5_password: n.transportOpts?.socks5Password || '',
         },
         transport_fallback: n.transportFallback || [],
         remote_proxy: {
@@ -504,7 +604,7 @@ const App = {
 
     // 渲染首页
     this.navigate(this.currentPage);
-    this.log('info', 'TLS-Client 桌面版 v4.1 已加载');
+    this.log('info', 'TLS-Client 桌面版 v4.2 已加载');
     this.log('info', `${this.state.fingerprints.length} 个指纹, ${this.state.nodes.length} 个节点`);
   }
 };
