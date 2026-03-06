@@ -1,7 +1,6 @@
 package api
 
 import (
-	"embed"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -20,9 +19,6 @@ import (
 	"github.com/user/tls-client/pkg/health"
 	"github.com/user/tls-client/pkg/transport"
 )
-
-//go:embed webui
-var WebUIFS embed.FS
 
 // ConfigUpdater 配置更新接口
 type ConfigUpdater interface {
@@ -512,9 +508,9 @@ func configToJSON(cfg *config.Config) map[string]any {
 			"fingerprint": n.Fingerprint,
 			"active":      n.Active,
 			"transport_opts": map[string]any{
-				"ws_path":    n.TransportOpts.WSPath,
-				"ws_host":    n.TransportOpts.WSHost,
-				"ws_headers": n.TransportOpts.WSHeaders,
+				"ws_path":     n.TransportOpts.WSPath,
+				"ws_host":     n.TransportOpts.WSHost,
+				"ws_headers":  n.TransportOpts.WSHeaders,
 				"socks5_addr": n.TransportOpts.SOCKS5Addr,
 			},
 			"remote_proxy": map[string]any{
@@ -619,8 +615,8 @@ func jsonToConfig(data map[string]any) (*config.Config, error) {
 				cfg.Inbound.SOCKS5.Password = v
 			}
 		}
-		if http, ok := inbound["http"].(map[string]any); ok {
-			if v, ok := http["listen"].(string); ok {
+		if httpCfg, ok := inbound["http"].(map[string]any); ok {
+			if v, ok := httpCfg["listen"].(string); ok {
 				cfg.Inbound.HTTP.Listen = v
 			}
 		}
@@ -649,8 +645,8 @@ func jsonToConfig(data map[string]any) (*config.Config, error) {
 	}
 
 	// 解析 tls
-	if tls, ok := data["tls"].(map[string]any); ok {
-		if v, ok := tls["verify_mode"].(string); ok {
+	if tlsCfg, ok := data["tls"].(map[string]any); ok {
+		if v, ok := tlsCfg["verify_mode"].(string); ok {
 			cfg.TLS.VerifyMode = v
 		}
 	}
@@ -698,20 +694,20 @@ func jsonToConfig(data map[string]any) (*config.Config, error) {
 	}
 
 	// 解析 health
-	if health, ok := data["health"].(map[string]any); ok {
-		if v, ok := health["enabled"].(bool); ok {
+	if healthCfg, ok := data["health"].(map[string]any); ok {
+		if v, ok := healthCfg["enabled"].(bool); ok {
 			cfg.Health.Enabled = v
 		}
-		if v, ok := health["interval"].(string); ok {
+		if v, ok := healthCfg["interval"].(string); ok {
 			cfg.Health.Interval = v
 		}
-		if v, ok := health["timeout"].(string); ok {
+		if v, ok := healthCfg["timeout"].(string); ok {
 			cfg.Health.Timeout = v
 		}
-		if v, ok := health["threshold"].(float64); ok {
+		if v, ok := healthCfg["threshold"].(float64); ok {
 			cfg.Health.Threshold = int(v)
 		}
-		if v, ok := health["degraded_ms"].(float64); ok {
+		if v, ok := healthCfg["degraded_ms"].(float64); ok {
 			cfg.Health.DegradedMs = int64(v)
 		}
 	}
