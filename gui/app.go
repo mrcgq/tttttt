@@ -18,7 +18,6 @@ import (
 )
 
 // App struct holds the GUI application state.
-// All exported methods are callable from the frontend via Wails bindings.
 type App struct {
 	ctx context.Context
 
@@ -156,6 +155,7 @@ func (a *App) apiRequest(method, endpoint string, body interface{}) (map[string]
 	if err != nil {
 		return nil, err
 	}
+
 	req.Header.Set("Content-Type", "application/json")
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
@@ -181,6 +181,7 @@ func (a *App) apiRequest(method, endpoint string, body interface{}) (map[string]
 	if err := json.Unmarshal(respBody, &result); err != nil {
 		return map[string]interface{}{"raw": string(respBody)}, nil
 	}
+
 	return result, nil
 }
 
@@ -209,7 +210,7 @@ func (a *App) StartLocalEngine(configPath string) error {
 	cmd := exec.Command(binary, "run", "-c", configPath)
 	cmd.Dir = filepath.Dir(binary)
 
-	// 【修复一】：隐藏 Windows 下的控制台黑框
+	// 隐藏 Windows 下的控制台黑框
 	hideWindow(cmd)
 
 	// 捕获输出
@@ -245,7 +246,6 @@ func (a *App) StartLocalEngine(configPath string) error {
 				return
 			}
 		}
-		// 30 次都失败，通知前端超时
 		wailsRuntime.EventsEmit(a.ctx, "engine:timeout", nil)
 	}()
 
