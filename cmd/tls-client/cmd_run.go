@@ -37,19 +37,15 @@ func init() {
 }
 
 // ================================================================
-// 全局配置管理器 - 支持热重载
+// ConfigManager — 支持热重载
 // ================================================================
 
-// ConfigManager 管理运行时配置和热重载
 type ConfigManager struct {
 	configPath string
-	config     atomic.Value // 存储 *config.Config
+	config     atomic.Value // *config.Config
 	mu         sync.RWMutex
+	reloadCh   chan *config.Config
 
-	// 重载信号通道
-	reloadCh chan *config.Config
-
-	// 组件引用（用于热重载时停止旧组件）
 	socks5Server  *inbound.SOCKS5Server
 	httpServer    *inbound.HTTPProxyServer
 	tunnel        *outbound.TunnelManager
@@ -57,21 +53,17 @@ type ConfigManager struct {
 	apiServer     *api.Server
 	proxyIPMgr    *ProxyIPManager
 
-	// 日志器
 	logger *zap.Logger
 }
 
-// NewConfigManager 创建配置管理器
 func NewConfigManager(path string, logger *zap.Logger) *ConfigManager {
-	cm := &ConfigManager{
+	return &ConfigManager{
 		configPath: path,
 		reloadCh:   make(chan *config.Config, 1),
 		logger:     logger,
 	}
-	return cm
 }
 
-// Load 加载配置文件
 func (cm *ConfigManager) Load() (*config.Config, error) {
 	cfg, err := config.Load(cm.configPath)
 	if err != nil {
@@ -81,7 +73,6 @@ func (cm *ConfigManager) Load() (*config.Config, error) {
 	return cfg, nil
 }
 
-// Get 获取当前配置（线程安全）
 func (cm *ConfigManager) Get() *config.Config {
 	if v := cm.config.Load(); v != nil {
 		return v.(*config.Config)
@@ -89,20 +80,16 @@ func (cm *ConfigManager) Get() *config.Config {
 	return nil
 }
 
-// Update 更新配置并触发重载
 func (cm *ConfigManager) Update(newCfg *config.Config) error {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 
-	// 验证新配置
 	if err := validateConfig(newCfg); err != nil {
 		return err
 	}
 
-	// 存储新配置
 	cm.config.Store(newCfg)
 
-	// 发送重载信号（非阻塞）
 	select {
 	case cm.reloadCh <- newCfg:
 		cm.logger.Info("reload signal sent")
@@ -113,40 +100,28 @@ func (cm *ConfigManager) Update(newCfg *config.Config) error {
 	return nil
 }
 
-// ReloadChannel 返回重载信号通道
 func (cm *ConfigManager) ReloadChannel() <-chan *config.Config {
 	return cm.reloadCh
 }
 
-// SaveToFile 将配置保存到文件
 func (cm *ConfigManager) SaveToFile() error {
 	cfg := cm.Get()
 	if cfg == nil {
 		return nil
 	}
-
-	// 将配置转换为 YAML 并写入文件
-	// 这里简化处理，实际可以用 yaml.Marshal
 	cm.logger.Info("config saved to file", zap.String("path", cm.configPath))
 	return nil
 }
 
-// validateConfig 验证配置有效性
 func validateConfig(cfg *config.Config) error {
 	if cfg == nil {
 		return nil
 	}
-	// 基本验证已在 config.Load 中完成
-	// 这里可以添加额外的运行时验证
 	return nil
 }
 
-// ================================================================
-// 全局配置管理器实例
-// ================================================================
 var globalConfigManager *ConfigManager
 
-// GetConfigManager 获取全局配置管理器
 func GetConfigManager() *ConfigManager {
 	return globalConfigManager
 }
@@ -156,50 +131,39 @@ func GetConfigManager() *ConfigManager {
 // ================================================================
 
 func runProxy(cmd *cobra.Command, args []string) error {
-	// 初始加载配置
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		return err
 	}
 
-	// 初始化日志器
 	logger, err := applog.NewWithOutput(cfg.Global.LogLevel, cfg.Global.LogOutput)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = logger.Sync() }()
 
-	// 创建配置管理器
 	globalConfigManager = NewConfigManager(configPath, logger)
 	globalConfigManager.config.Store(cfg)
 
-	// 解析验证模式
 	vmode, err := verify.ParseMode(cfg.TLS.VerifyMode)
 	if err != nil {
 		return err
 	}
 
-	// ================================================================
-	// 初始化指纹选择器
-	// ================================================================
 	selector, err := initFingerprintSelector(cfg)
 	if err != nil {
 		return err
 	}
 
-	// ================================================================
-	// 初始化各组件
-	// ================================================================
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// 初始化组件（首次启动，isReload=false）
+	// 首次启动：isReload=false, existingAPI=nil
 	components, err := initComponents(ctx, cfg, selector, vmode, logger, false, nil)
 	if err != nil {
 		return err
 	}
 
-	// 存储组件引用到配置管理器
 	globalConfigManager.socks5Server = components.socks5
 	globalConfigManager.httpServer = components.httpProxy
 	globalConfigManager.tunnel = components.tunnel
@@ -207,14 +171,8 @@ func runProxy(cmd *cobra.Command, args []string) error {
 	globalConfigManager.apiServer = components.apiServer
 	globalConfigManager.proxyIPMgr = components.proxyIPMgr
 
-	// ================================================================
-	// 启动重载监听器
-	// ================================================================
 	go reloadLoop(ctx, globalConfigManager, logger)
 
-	// ================================================================
-	// 等待退出信号
-	// ================================================================
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 
@@ -222,7 +180,6 @@ func runProxy(cmd *cobra.Command, args []string) error {
 		sig := <-sigCh
 		switch sig {
 		case syscall.SIGHUP:
-			// SIGHUP 触发配置重载
 			logger.Info("received SIGHUP, reloading configuration")
 			newCfg, err := config.Load(configPath)
 			if err != nil {
@@ -233,7 +190,6 @@ func runProxy(cmd *cobra.Command, args []string) error {
 				logger.Error("failed to update config", zap.Error(err))
 			}
 		case syscall.SIGINT, syscall.SIGTERM:
-			// 优雅关闭
 			logger.Info("shutting down", zap.String("signal", sig.String()))
 			shutdownComponents(components, logger)
 			return nil
@@ -242,7 +198,7 @@ func runProxy(cmd *cobra.Command, args []string) error {
 }
 
 // ================================================================
-// 组件结构
+// Components
 // ================================================================
 
 type Components struct {
@@ -256,10 +212,6 @@ type Components struct {
 	cookieMgr  *engine.CookieManager
 }
 
-// ================================================================
-// 初始化指纹选择器
-// ================================================================
-
 func initFingerprintSelector(cfg *config.Config) (fingerprint.Selector, error) {
 	profileNames := cfg.Fingerprint.Rotation.Profiles
 	if len(profileNames) == 0 && cfg.Fingerprint.Rotation.Profile != "" {
@@ -269,9 +221,8 @@ func initFingerprintSelector(cfg *config.Config) (fingerprint.Selector, error) {
 }
 
 // ================================================================
-// 初始化所有组件
-// isReload: 是否为热重载（true 时跳过 API Server 创建）
-// existingAPI: 热重载时复用的 API Server 实例
+// initComponents
+// isReload=true 时复用 existingAPI，不重建 API Server
 // ================================================================
 
 func initComponents(
@@ -285,9 +236,7 @@ func initComponents(
 ) (*Components, error) {
 	comp := &Components{}
 
-	// ----------------------------------------------------------------
-	// 初始化时序控制
-	// ----------------------------------------------------------------
+	// 时序控制
 	if cfg.ClientBehavior.Cadence.Mode != "none" && cfg.ClientBehavior.Cadence.Mode != "" {
 		cadenceConfig := engine.CadenceConfig{
 			Mode:     engine.CadenceMode(cfg.ClientBehavior.Cadence.Mode),
@@ -304,9 +253,7 @@ func initComponents(
 		)
 	}
 
-	// ----------------------------------------------------------------
-	// 初始化 Cookie 管理器
-	// ----------------------------------------------------------------
+	// Cookie 管理器
 	if cfg.ClientBehavior.Cookies.Enabled {
 		var err error
 		comp.cookieMgr, err = engine.NewCookieManager()
@@ -319,9 +266,7 @@ func initComponents(
 		}
 	}
 
-	// ----------------------------------------------------------------
-	// 初始化健康检查器
-	// ----------------------------------------------------------------
+	// 健康检查器
 	if cfg.Health.Enabled {
 		comp.checker = health.NewChecker(logger)
 
@@ -354,20 +299,15 @@ func initComponents(
 		)
 	}
 
-	// ----------------------------------------------------------------
-	// 初始化 API 服务器（仅首次启动时创建，热重载时复用）
-	// ----------------------------------------------------------------
+	// API Server — 热重载时复用
 	if isReload && existingAPI != nil {
-		// 热重载：复用现有 API Server，不重新创建
 		comp.apiServer = existingAPI
 		logger.Info("api server reused (hot reload)")
 	} else if cfg.API.Enabled {
-		// 首次启动：创建新的 API Server
 		comp.apiServer = api.NewServer(cfg.API.Listen, cfg.API.Token, logger)
 		if comp.checker != nil {
 			comp.apiServer.SetHealthChecker(comp.checker)
 		}
-		// 设置配置管理器引用
 		comp.apiServer.SetConfigManager(globalConfigManager)
 
 		if err := comp.apiServer.Start(); err != nil {
@@ -380,9 +320,7 @@ func initComponents(
 		}
 	}
 
-	// ----------------------------------------------------------------
-	// 初始化 ProxyIP 管理器
-	// ----------------------------------------------------------------
+	// ProxyIP 管理器
 	var proxyIPSelector outbound.ProxyIPSelector
 	if cfg.ProxyIPs.Enabled && len(cfg.ProxyIPs.Entries) > 0 {
 		comp.proxyIPMgr = NewProxyIPManager(cfg.ProxyIPs, logger)
@@ -395,9 +333,7 @@ func initComponents(
 		)
 	}
 
-	// ----------------------------------------------------------------
-	// 初始化隧道管理器
-	// ----------------------------------------------------------------
+	// 隧道管理器
 	activeNodeCfg := cfg.ActiveNode()
 	if activeNodeCfg == nil {
 		logger.Fatal("no active node configured")
@@ -429,21 +365,17 @@ func initComponents(
 		zap.String("verify", string(vmode)),
 	)
 
-	// 更新 API 服务器的当前节点和配置信息
 	if comp.apiServer != nil {
 		comp.apiServer.SetCurrentNode(node.Name)
 		comp.apiServer.SetCurrentProfile(nodeProfile.Name)
 		comp.apiServer.SetEngineRunning(true)
 
-		// 热重载时更新健康检查器引用
 		if comp.checker != nil {
 			comp.apiServer.SetHealthChecker(comp.checker)
 		}
 	}
 
-	// ----------------------------------------------------------------
-	// 启动入站代理服务器
-	// ----------------------------------------------------------------
+	// 入站代理
 	onConnect := func(clientConn net.Conn, target, domain string) {
 		if comp.cadence != nil {
 			comp.cadence.Wait()
@@ -451,7 +383,6 @@ func initComponents(
 		comp.tunnel.HandleConnect(clientConn, target, domain)
 	}
 
-	// SOCKS5 服务器
 	if cfg.Inbound.SOCKS5.Listen != "" {
 		if cfg.Inbound.SOCKS5.Username != "" {
 			comp.socks5 = inbound.NewSOCKS5ServerWithAuth(
@@ -470,7 +401,6 @@ func initComponents(
 		logger.Info("socks5 server started", zap.String("listen", cfg.Inbound.SOCKS5.Listen))
 	}
 
-	// HTTP 代理服务器
 	if cfg.Inbound.HTTP.Listen != "" {
 		comp.httpProxy = inbound.NewHTTPProxyServer(cfg.Inbound.HTTP.Listen, logger, onConnect)
 		if err := comp.httpProxy.Start(); err != nil {
@@ -483,14 +413,14 @@ func initComponents(
 }
 
 // ================================================================
-// 关闭所有组件（不关闭 API Server，除非完全退出）
+// 关闭组件
 // ================================================================
 
+// shutdownComponents 完全关闭（包括 API Server）
 func shutdownComponents(comp *Components, logger *zap.Logger) {
 	if comp == nil {
 		return
 	}
-
 	if comp.socks5 != nil {
 		comp.socks5.Stop()
 		logger.Debug("socks5 server stopped")
@@ -523,12 +453,11 @@ func shutdownComponents(comp *Components, logger *zap.Logger) {
 	}
 }
 
-// shutdownReloadableComponents 关闭可重载的组件（保留 API Server）
+// shutdownReloadableComponents 热重载时关闭（保留 API Server）
 func shutdownReloadableComponents(comp *Components, logger *zap.Logger) {
 	if comp == nil {
 		return
 	}
-
 	if comp.socks5 != nil {
 		comp.socks5.Stop()
 		logger.Debug("socks5 server stopped (reload)")
@@ -549,7 +478,6 @@ func shutdownReloadableComponents(comp *Components, logger *zap.Logger) {
 		comp.proxyIPMgr.Stop()
 		logger.Debug("proxy ip manager stopped (reload)")
 	}
-	// 注意：不关闭 apiServer，热重载时复用
 }
 
 // ================================================================
@@ -564,10 +492,8 @@ func reloadLoop(ctx context.Context, cm *ConfigManager, logger *zap.Logger) {
 		case newCfg := <-cm.ReloadChannel():
 			logger.Info("reloading configuration...")
 
-			// 保存当前 API Server 引用（热重载时复用）
 			existingAPI := cm.apiServer
 
-			// 解析新配置
 			vmode, err := verify.ParseMode(newCfg.TLS.VerifyMode)
 			if err != nil {
 				logger.Error("invalid verify mode in new config", zap.Error(err))
@@ -580,32 +506,29 @@ func reloadLoop(ctx context.Context, cm *ConfigManager, logger *zap.Logger) {
 				continue
 			}
 
-			// 初始化新组件（isReload=true，复用 API Server）
+			// isReload=true，复用 existingAPI
 			newComp, err := initComponents(ctx, newCfg, selector, vmode, logger, true, existingAPI)
 			if err != nil {
 				logger.Error("failed to init new components, keeping old config", zap.Error(err))
-				// 回滚：如果新组件初始化失败，不关闭旧组件
 				continue
 			}
 
-			// 关闭旧的可重载组件（在新组件启动成功后，保留 API Server）
+			// 关闭旧的可重载组件（不关闭 API Server）
 			oldComp := &Components{
 				socks5:     cm.socks5Server,
 				httpProxy:  cm.httpServer,
 				tunnel:     cm.tunnel,
 				checker:    cm.healthChecker,
 				proxyIPMgr: cm.proxyIPMgr,
-				// apiServer 不放入，不关闭
 			}
 			shutdownReloadableComponents(oldComp, logger)
 
-			// 更新组件引用
+			// 更新引用
 			cm.socks5Server = newComp.socks5
 			cm.httpServer = newComp.httpProxy
 			cm.tunnel = newComp.tunnel
 			cm.healthChecker = newComp.checker
 			cm.proxyIPMgr = newComp.proxyIPMgr
-			// apiServer 保持不变
 
 			logger.Info("configuration reloaded successfully",
 				zap.String("socks5_listen", newCfg.Inbound.SOCKS5.Listen),
@@ -617,7 +540,7 @@ func reloadLoop(ctx context.Context, cm *ConfigManager, logger *zap.Logger) {
 }
 
 // ================================================================
-// ProxyIP 管理器（简化版）
+// ProxyIP 管理器
 // ================================================================
 
 type ProxyIPManager struct {
