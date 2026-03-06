@@ -13,6 +13,7 @@ const ConfigPage = {
     <div class="card-actions">
       <button class="btn btn-sm btn-primary" onclick="ConfigPage.copy()">📋 复制</button>
       <button class="btn btn-sm btn-success" onclick="ConfigPage.download()">💾 保存文件</button>
+      <button class="btn btn-sm btn-warning" onclick="ConfigPage.uploadToEngine()">🚀 上传到引擎</button>
       <button class="btn btn-sm btn-secondary" onclick="ConfigPage.refresh()">🔄 刷新</button>
     </div>
   </div>
@@ -24,11 +25,22 @@ const ConfigPage = {
 <div class="card">
   <div class="card-header"><h3>📖 使用方法</h3></div>
   <div class="card-body" style="color:var(--c-text-2);line-height:2">
+    <p><strong>方法一：手动启动</strong></p>
     <p>1. 点击「保存文件」选择保存路径</p>
     <p>2. 运行引擎:</p>
     <div class="code-block" style="margin:8px 0">./tls-client run -c config.yaml</div>
-    <p>3. 或在「连接管理」页面选择配置文件直接启动本地引擎</p>
-    <p>4. 也可通过 API 动态更新配置</p>
+
+    <div class="divider"></div>
+
+    <p><strong>方法二：GUI 直接上传</strong></p>
+    <p>1. 确保引擎正在运行并已连接 API</p>
+    <p>2. 点击「上传到引擎」按钮</p>
+    <p>3. 引擎将自动热重载新配置</p>
+
+    <div class="divider"></div>
+
+    <p><strong>方法三：本地引擎</strong></p>
+    <p>在「连接管理」页面选择配置文件直接启动本地引擎</p>
   </div>
 </div>`;
   },
@@ -70,6 +82,10 @@ client_behavior:
     clear_on_rotation: ${s.cookieClearOnRotation}
   follow_redirects: ${s.followRedirects}
   max_redirects: ${s.maxRedirects}
+
+api:
+  enabled: true
+  listen: "127.0.0.1:9090"
 
 nodes:
 `;
@@ -117,6 +133,21 @@ nodes:
       // Wails 不可用时回退到浏览器下载
       App.downloadFile('config.yaml', yaml);
       App.toast('配置已下载', 'success');
+    }
+  },
+
+  // ================================================================
+  // 上传配置到引擎
+  // ================================================================
+  async uploadToEngine() {
+    if (!API.connected) {
+      App.toast('请先连接到引擎 API', 'warning');
+      return;
+    }
+
+    const success = await App.pushConfigToEngine();
+    if (success) {
+      App.log('info', '配置已上传到引擎并触发热重载');
     }
   },
 
