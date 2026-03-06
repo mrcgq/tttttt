@@ -1,6 +1,7 @@
 package api
 
 import (
+	"embed"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -13,11 +14,21 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/user/tls-client/pkg/config"
 	"github.com/user/tls-client/pkg/engine"
 	"github.com/user/tls-client/pkg/fingerprint"
 	"github.com/user/tls-client/pkg/health"
 	"github.com/user/tls-client/pkg/transport"
 )
+
+//go:embed webui
+var WebUIFS embed.FS
+
+// ConfigUpdater 配置更新接口
+type ConfigUpdater interface {
+	Get() *config.Config
+	Update(cfg *config.Config) error
+}
 
 // Server is the management API HTTP server with embedded WebUI.
 type Server struct {
@@ -29,6 +40,9 @@ type Server struct {
 
 	server   *http.Server
 	requests int64
+
+	// 配置管理器
+	configManager ConfigUpdater
 
 	// 引擎状态
 	mu             sync.RWMutex
@@ -53,6 +67,11 @@ func NewServer(addr, token string, logger *zap.Logger) *Server {
 // SetHealthChecker attaches a health checker for /api/proxies.
 func (s *Server) SetHealthChecker(c *health.Checker) {
 	s.Checker = c
+}
+
+// SetConfigManager 设置配置管理器
+func (s *Server) SetConfigManager(cm ConfigUpdater) {
+	s.configManager = cm
 }
 
 // SetCurrentNode sets the active node name.
@@ -123,7 +142,7 @@ func (s *Server) Start() error {
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 			// CORS 头
 			w.Header().Set("Access-Control-Allow-Origin", "*")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 
 			if r.Method == "OPTIONS" {
@@ -362,6 +381,22 @@ func (s *Server) handleReload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+
+	// 如果有配置管理器，触发重载
+	if s.configManager != nil {
+		currentCfg := s.configManager.Get()
+		if currentCfg != nil {
+			if err := s.configManager.Update(currentCfg); err != nil {
+				s.Logger.Error("reload failed", zap.Error(err))
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"success": false,
+					"message": fmt.Sprintf("重载失败: %v", err),
+				})
+				return
+			}
+		}
+	}
+
 	s.Logger.Info("config reload requested via API")
 	_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "message": "配置重载命令已接收"})
 }
@@ -371,37 +406,410 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodGet:
-		s.mu.RLock()
-		config := map[string]any{
-			"current_profile": s.currentProfile,
-			"current_node":    s.currentNode,
-			"engine_running":  s.engineRunning,
-		}
-		s.mu.RUnlock()
-		_ = json.NewEncoder(w).Encode(config)
-
-	case http.MethodPost:
-		var newConfig map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&newConfig); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+		// 返回完整配置
+		if s.configManager == nil {
+			s.mu.RLock()
+			basicConfig := map[string]any{
+				"current_profile": s.currentProfile,
+				"current_node":    s.currentNode,
+				"engine_running":  s.engineRunning,
+			}
+			s.mu.RUnlock()
+			_ = json.NewEncoder(w).Encode(basicConfig)
 			return
 		}
 
+		cfg := s.configManager.Get()
+		if cfg == nil {
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "no configuration loaded"})
+			return
+		}
+
+		// 将配置转换为 JSON 格式返回
+		fullConfig := configToJSON(cfg)
+		s.mu.RLock()
+		fullConfig["current_profile"] = s.currentProfile
+		fullConfig["current_node"] = s.currentNode
+		fullConfig["engine_running"] = s.engineRunning
+		s.mu.RUnlock()
+
+		_ = json.NewEncoder(w).Encode(fullConfig)
+
+	case http.MethodPost:
+		// 更新配置
+		if s.configManager == nil {
+			http.Error(w, "config manager not available", http.StatusServiceUnavailable)
+			return
+		}
+
+		var newConfigJSON map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&newConfigJSON); err != nil {
+			http.Error(w, fmt.Sprintf("invalid JSON: %v", err), http.StatusBadRequest)
+			return
+		}
+
+		// 将 JSON 转换为 config.Config
+		newCfg, err := jsonToConfig(newConfigJSON)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("invalid config: %v", err), http.StatusBadRequest)
+			return
+		}
+
+		// 更新配置并触发重载
+		if err := s.configManager.Update(newCfg); err != nil {
+			s.Logger.Error("config update failed", zap.Error(err))
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"success": false,
+				"message": fmt.Sprintf("配置更新失败: %v", err),
+			})
+			return
+		}
+
+		// 更新本地状态
 		s.mu.Lock()
-		if profile, ok := newConfig["profile"].(string); ok {
+		if profile, ok := newConfigJSON["current_profile"].(string); ok && profile != "" {
 			s.currentProfile = profile
 		}
-		if node, ok := newConfig["node"].(string); ok {
-			s.currentNode = node
+		// 查找激活的节点
+		if nodes, ok := newConfigJSON["nodes"].([]any); ok {
+			for _, n := range nodes {
+				if node, ok := n.(map[string]any); ok {
+					if active, ok := node["active"].(bool); ok && active {
+						if name, ok := node["name"].(string); ok {
+							s.currentNode = name
+						}
+						break
+					}
+				}
+			}
 		}
 		s.mu.Unlock()
 
-		s.Logger.Info("config updated via API", zap.Any("config", newConfig))
-		_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "message": "配置已更新"})
+		s.Logger.Info("config updated via API",
+			zap.Int("nodes_count", len(newCfg.Nodes)),
+			zap.String("socks5_listen", newCfg.Inbound.SOCKS5.Listen),
+		)
+
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"success": true,
+			"message": "配置已更新并触发重载",
+		})
 
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// configToJSON 将 config.Config 转换为 JSON 友好的 map
+func configToJSON(cfg *config.Config) map[string]any {
+	nodes := make([]map[string]any, 0, len(cfg.Nodes))
+	for _, n := range cfg.Nodes {
+		node := map[string]any{
+			"name":        n.Name,
+			"address":     n.Address,
+			"sni":         n.SNI,
+			"transport":   n.Transport,
+			"fingerprint": n.Fingerprint,
+			"active":      n.Active,
+			"transport_opts": map[string]any{
+				"ws_path":    n.TransportOpts.WSPath,
+				"ws_host":    n.TransportOpts.WSHost,
+				"ws_headers": n.TransportOpts.WSHeaders,
+				"socks5_addr": n.TransportOpts.SOCKS5Addr,
+			},
+			"remote_proxy": map[string]any{
+				"socks5":   n.RemoteProxy.SOCKS5,
+				"fallback": n.RemoteProxy.Fallback,
+			},
+			"retry": map[string]any{
+				"max_attempts": n.Retry.MaxAttempts,
+				"base_delay":   n.Retry.BaseDelay,
+				"max_delay":    n.Retry.MaxDelay,
+				"jitter":       n.Retry.Jitter,
+			},
+			"pool": map[string]any{
+				"max_idle":     n.Pool.MaxIdle,
+				"max_per_key":  n.Pool.MaxPerKey,
+				"idle_timeout": n.Pool.IdleTimeout,
+				"max_lifetime": n.Pool.MaxLifetime,
+			},
+		}
+		nodes = append(nodes, node)
+	}
+
+	return map[string]any{
+		"global": map[string]any{
+			"log_level":  cfg.Global.LogLevel,
+			"log_output": cfg.Global.LogOutput,
+		},
+		"inbound": map[string]any{
+			"socks5": map[string]any{
+				"listen":   cfg.Inbound.SOCKS5.Listen,
+				"username": cfg.Inbound.SOCKS5.Username,
+				"password": cfg.Inbound.SOCKS5.Password,
+			},
+			"http": map[string]any{
+				"listen": cfg.Inbound.HTTP.Listen,
+			},
+		},
+		"fingerprint": map[string]any{
+			"rotation": map[string]any{
+				"mode":     cfg.Fingerprint.Rotation.Mode,
+				"profile":  cfg.Fingerprint.Rotation.Profile,
+				"profiles": cfg.Fingerprint.Rotation.Profiles,
+				"interval": cfg.Fingerprint.Rotation.Interval,
+			},
+		},
+		"tls": map[string]any{
+			"verify_mode": cfg.TLS.VerifyMode,
+		},
+		"client_behavior": map[string]any{
+			"cadence": map[string]any{
+				"mode":      cfg.ClientBehavior.Cadence.Mode,
+				"min_delay": cfg.ClientBehavior.Cadence.MinDelay,
+				"max_delay": cfg.ClientBehavior.Cadence.MaxDelay,
+				"jitter":    cfg.ClientBehavior.Cadence.Jitter,
+			},
+			"cookies": map[string]any{
+				"enabled":           cfg.ClientBehavior.Cookies.Enabled,
+				"clear_on_rotation": cfg.ClientBehavior.Cookies.ClearOnRotation,
+			},
+			"follow_redirects": cfg.ClientBehavior.FollowRedirects,
+			"max_redirects":    cfg.ClientBehavior.MaxRedirects,
+		},
+		"api": map[string]any{
+			"enabled": cfg.API.Enabled,
+			"listen":  cfg.API.Listen,
+		},
+		"health": map[string]any{
+			"enabled":     cfg.Health.Enabled,
+			"interval":    cfg.Health.Interval,
+			"timeout":     cfg.Health.Timeout,
+			"threshold":   cfg.Health.Threshold,
+			"degraded_ms": cfg.Health.DegradedMs,
+		},
+		"nodes": nodes,
+	}
+}
+
+// jsonToConfig 将 JSON map 转换为 config.Config
+func jsonToConfig(data map[string]any) (*config.Config, error) {
+	cfg := &config.Config{}
+
+	// 解析 global
+	if global, ok := data["global"].(map[string]any); ok {
+		if v, ok := global["log_level"].(string); ok {
+			cfg.Global.LogLevel = v
+		}
+		if v, ok := global["log_output"].(string); ok {
+			cfg.Global.LogOutput = v
+		}
+	}
+
+	// 解析 inbound
+	if inbound, ok := data["inbound"].(map[string]any); ok {
+		if socks5, ok := inbound["socks5"].(map[string]any); ok {
+			if v, ok := socks5["listen"].(string); ok {
+				cfg.Inbound.SOCKS5.Listen = v
+			}
+			if v, ok := socks5["username"].(string); ok {
+				cfg.Inbound.SOCKS5.Username = v
+			}
+			if v, ok := socks5["password"].(string); ok {
+				cfg.Inbound.SOCKS5.Password = v
+			}
+		}
+		if http, ok := inbound["http"].(map[string]any); ok {
+			if v, ok := http["listen"].(string); ok {
+				cfg.Inbound.HTTP.Listen = v
+			}
+		}
+	}
+
+	// 解析 fingerprint
+	if fp, ok := data["fingerprint"].(map[string]any); ok {
+		if rotation, ok := fp["rotation"].(map[string]any); ok {
+			if v, ok := rotation["mode"].(string); ok {
+				cfg.Fingerprint.Rotation.Mode = v
+			}
+			if v, ok := rotation["profile"].(string); ok {
+				cfg.Fingerprint.Rotation.Profile = v
+			}
+			if v, ok := rotation["profiles"].([]any); ok {
+				for _, p := range v {
+					if s, ok := p.(string); ok {
+						cfg.Fingerprint.Rotation.Profiles = append(cfg.Fingerprint.Rotation.Profiles, s)
+					}
+				}
+			}
+			if v, ok := rotation["interval"].(string); ok {
+				cfg.Fingerprint.Rotation.Interval = v
+			}
+		}
+	}
+
+	// 解析 tls
+	if tls, ok := data["tls"].(map[string]any); ok {
+		if v, ok := tls["verify_mode"].(string); ok {
+			cfg.TLS.VerifyMode = v
+		}
+	}
+
+	// 解析 client_behavior
+	if cb, ok := data["client_behavior"].(map[string]any); ok {
+		if cadence, ok := cb["cadence"].(map[string]any); ok {
+			if v, ok := cadence["mode"].(string); ok {
+				cfg.ClientBehavior.Cadence.Mode = v
+			}
+			if v, ok := cadence["min_delay"].(string); ok {
+				cfg.ClientBehavior.Cadence.MinDelay = v
+			}
+			if v, ok := cadence["max_delay"].(string); ok {
+				cfg.ClientBehavior.Cadence.MaxDelay = v
+			}
+			if v, ok := cadence["jitter"].(float64); ok {
+				cfg.ClientBehavior.Cadence.Jitter = v
+			}
+		}
+		if cookies, ok := cb["cookies"].(map[string]any); ok {
+			if v, ok := cookies["enabled"].(bool); ok {
+				cfg.ClientBehavior.Cookies.Enabled = v
+			}
+			if v, ok := cookies["clear_on_rotation"].(bool); ok {
+				cfg.ClientBehavior.Cookies.ClearOnRotation = v
+			}
+		}
+		if v, ok := cb["follow_redirects"].(bool); ok {
+			cfg.ClientBehavior.FollowRedirects = v
+		}
+		if v, ok := cb["max_redirects"].(float64); ok {
+			cfg.ClientBehavior.MaxRedirects = int(v)
+		}
+	}
+
+	// 解析 api
+	if apiCfg, ok := data["api"].(map[string]any); ok {
+		if v, ok := apiCfg["enabled"].(bool); ok {
+			cfg.API.Enabled = v
+		}
+		if v, ok := apiCfg["listen"].(string); ok {
+			cfg.API.Listen = v
+		}
+	}
+
+	// 解析 health
+	if health, ok := data["health"].(map[string]any); ok {
+		if v, ok := health["enabled"].(bool); ok {
+			cfg.Health.Enabled = v
+		}
+		if v, ok := health["interval"].(string); ok {
+			cfg.Health.Interval = v
+		}
+		if v, ok := health["timeout"].(string); ok {
+			cfg.Health.Timeout = v
+		}
+		if v, ok := health["threshold"].(float64); ok {
+			cfg.Health.Threshold = int(v)
+		}
+		if v, ok := health["degraded_ms"].(float64); ok {
+			cfg.Health.DegradedMs = int64(v)
+		}
+	}
+
+	// 解析 nodes
+	if nodes, ok := data["nodes"].([]any); ok {
+		for _, n := range nodes {
+			if nodeMap, ok := n.(map[string]any); ok {
+				node := config.NodeConfig{}
+
+				if v, ok := nodeMap["name"].(string); ok {
+					node.Name = v
+				}
+				if v, ok := nodeMap["address"].(string); ok {
+					node.Address = v
+				}
+				if v, ok := nodeMap["sni"].(string); ok {
+					node.SNI = v
+				}
+				if v, ok := nodeMap["transport"].(string); ok {
+					node.Transport = v
+				}
+				if v, ok := nodeMap["fingerprint"].(string); ok {
+					node.Fingerprint = v
+				}
+				if v, ok := nodeMap["active"].(bool); ok {
+					node.Active = v
+				}
+
+				// transport_opts
+				if opts, ok := nodeMap["transport_opts"].(map[string]any); ok {
+					if v, ok := opts["ws_path"].(string); ok {
+						node.TransportOpts.WSPath = v
+					}
+					if v, ok := opts["ws_host"].(string); ok {
+						node.TransportOpts.WSHost = v
+					}
+					if v, ok := opts["socks5_addr"].(string); ok {
+						node.TransportOpts.SOCKS5Addr = v
+					}
+					if headers, ok := opts["ws_headers"].(map[string]any); ok {
+						node.TransportOpts.WSHeaders = make(map[string]string)
+						for k, v := range headers {
+							if s, ok := v.(string); ok {
+								node.TransportOpts.WSHeaders[k] = s
+							}
+						}
+					}
+				}
+
+				// remote_proxy
+				if rp, ok := nodeMap["remote_proxy"].(map[string]any); ok {
+					if v, ok := rp["socks5"].(string); ok {
+						node.RemoteProxy.SOCKS5 = v
+					}
+					if v, ok := rp["fallback"].(string); ok {
+						node.RemoteProxy.Fallback = v
+					}
+				}
+
+				// retry
+				if retry, ok := nodeMap["retry"].(map[string]any); ok {
+					if v, ok := retry["max_attempts"].(float64); ok {
+						node.Retry.MaxAttempts = int(v)
+					}
+					if v, ok := retry["base_delay"].(string); ok {
+						node.Retry.BaseDelay = v
+					}
+					if v, ok := retry["max_delay"].(string); ok {
+						node.Retry.MaxDelay = v
+					}
+					if v, ok := retry["jitter"].(float64); ok {
+						node.Retry.Jitter = v
+					}
+				}
+
+				// pool
+				if pool, ok := nodeMap["pool"].(map[string]any); ok {
+					if v, ok := pool["max_idle"].(float64); ok {
+						node.Pool.MaxIdle = int(v)
+					}
+					if v, ok := pool["max_per_key"].(float64); ok {
+						node.Pool.MaxPerKey = int(v)
+					}
+					if v, ok := pool["idle_timeout"].(string); ok {
+						node.Pool.IdleTimeout = v
+					}
+					if v, ok := pool["max_lifetime"].(string); ok {
+						node.Pool.MaxLifetime = v
+					}
+				}
+
+				cfg.Nodes = append(cfg.Nodes, node)
+			}
+		}
+	}
+
+	return cfg, nil
 }
 
 func successRate(success, failure int64) float64 {
