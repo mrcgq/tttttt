@@ -29,7 +29,7 @@ const NodesPage = {
       </div>
       <div class="form-group">
         <label>传输协议</label>
-        <select id="new-node-transport">
+        <select id="new-node-transport" onchange="NodesPage.onTransportChange('new')">
           <option value="ws">WebSocket (推荐)</option>
           <option value="h2">HTTP/2</option>
           <option value="raw">Raw TCP</option>
@@ -49,15 +49,30 @@ const NodesPage = {
     </div>
     <div class="form-row">
       <div class="form-group">
+        <label>H2 路径 (仅 HTTP/2)</label>
+        <input type="text" id="new-node-h2-path" placeholder="/h2-tunnel">
+      </div>
+      <div class="form-group">
         <label>指定指纹 (可选)</label>
         <select id="new-node-fingerprint">
           <option value="">使用全局设置</option>
           ${App.state.fingerprints.map(f => `<option value="${f.name}">${f.name} (${f.browser}/${f.platform})</option>`).join('')}
         </select>
       </div>
+    </div>
+    <div class="section-title">🧦 SOCKS5-Out 配置</div>
+    <div class="form-row">
       <div class="form-group">
         <label>SOCKS5-Out 代理地址</label>
         <input type="text" id="new-node-socks5out" placeholder="127.0.0.1:9050 (仅 socks5-out 模式)">
+      </div>
+      <div class="form-group">
+        <label>SOCKS5-Out 用户名</label>
+        <input type="text" id="new-node-socks5out-user" placeholder="可选认证用户名">
+      </div>
+      <div class="form-group">
+        <label>SOCKS5-Out 密码</label>
+        <input type="password" id="new-node-socks5out-pass" placeholder="可选认证密码">
       </div>
     </div>
     <div class="section-title">🔗 Xlink 借力配置 (可选)</div>
@@ -71,6 +86,14 @@ const NodesPage = {
         <label>Fallback</label>
         <input type="text" id="new-node-remote-fallback" placeholder="proxyip.example.net:443">
         <div class="hint">Worker 直连失败时的备用地址</div>
+      </div>
+    </div>
+    <div class="section-title">🔀 传输层 Fallback (可选)</div>
+    <div class="form-row">
+      <div class="form-group" style="flex:1">
+        <label>Fallback 协议列表</label>
+        <input type="text" id="new-node-transport-fallback" placeholder="ws,h2,raw (逗号分隔)">
+        <div class="hint">当主传输协议失败时尝试的备用协议，按顺序使用</div>
       </div>
     </div>
     <div class="section-title">🔁 重试与连接池</div>
@@ -150,6 +173,7 @@ const NodesPage = {
       ${isActive ? '<span class="badge badge-green">活跃</span>' : ''}
       ${node.transport === 'socks5-out' ? '<span class="badge badge-orange">SOCKS5-Out</span>' : ''}
       ${node.remoteProxy?.socks5 ? '<span class="badge badge-purple">Xlink</span>' : ''}
+      ${node.transportFallback?.length ? '<span class="badge badge-blue">Fallback</span>' : ''}
     </div>
     <div class="btn-group">
       ${isEditing
@@ -164,7 +188,10 @@ const NodesPage = {
     <span class="node-detail">🔒 ${node.sni}</span>
     <span class="node-detail">🚀 ${node.transport.toUpperCase()}</span>
     ${node.fingerprint ? `<span class="node-detail">🎭 ${node.fingerprint}</span>` : ''}
-    ${node.transportOpts?.wsPath ? `<span class="node-detail">📂 ${node.transportOpts.wsPath}</span>` : ''}
+    ${node.transportOpts?.wsPath && node.transport === 'ws' ? `<span class="node-detail">📂 ${node.transportOpts.wsPath}</span>` : ''}
+    ${node.transportOpts?.h2Path && node.transport === 'h2' ? `<span class="node-detail">📂 H2:${node.transportOpts.h2Path}</span>` : ''}
+    ${node.transportOpts?.socks5Addr && node.transport === 'socks5-out' ? `<span class="node-detail">🧦 ${node.transportOpts.socks5Addr}</span>` : ''}
+    ${node.transportFallback?.length ? `<span class="node-detail">🔀 fallback: ${node.transportFallback.join(',')}</span>` : ''}
   </div>
   ${isEditing ? this.renderEditForm(node, index) : ''}
   <div class="node-actions-bar" id="node-delete-confirm-${index}" style="display:none">
@@ -182,6 +209,7 @@ const NodesPage = {
     const rp = node.remoteProxy || {};
     const retry = node.retry || {};
     const pool = node.pool || {};
+    const fallback = node.transportFallback || [];
 
     return `
 <div class="node-edit-form visible" id="node-edit-${index}">
@@ -220,6 +248,12 @@ const NodesPage = {
       <input type="text" id="edit-wshost-${index}" value="${opts.wsHost || ''}">
     </div>
     <div class="form-group">
+      <label>H2 路径</label>
+      <input type="text" id="edit-h2path-${index}" value="${opts.h2Path || ''}">
+    </div>
+  </div>
+  <div class="form-row">
+    <div class="form-group">
       <label>指纹</label>
       <select id="edit-fp-${index}">
         <option value="">全局</option>
@@ -227,10 +261,19 @@ const NodesPage = {
       </select>
     </div>
   </div>
+  <div class="section-title">🧦 SOCKS5-Out</div>
   <div class="form-row">
     <div class="form-group">
       <label>SOCKS5-Out 地址</label>
       <input type="text" id="edit-s5out-${index}" value="${opts.socks5Addr || ''}">
+    </div>
+    <div class="form-group">
+      <label>SOCKS5-Out 用户名</label>
+      <input type="text" id="edit-s5out-user-${index}" value="${opts.socks5Username || ''}">
+    </div>
+    <div class="form-group">
+      <label>SOCKS5-Out 密码</label>
+      <input type="password" id="edit-s5out-pass-${index}" value="${opts.socks5Password || ''}">
     </div>
   </div>
   <div class="section-title">🔗 Xlink 借力</div>
@@ -242,6 +285,13 @@ const NodesPage = {
     <div class="form-group">
       <label>Fallback</label>
       <input type="text" id="edit-rfb-${index}" value="${rp.fallback || ''}">
+    </div>
+  </div>
+  <div class="section-title">🔀 传输层 Fallback</div>
+  <div class="form-row">
+    <div class="form-group" style="flex:1">
+      <label>Fallback 协议列表</label>
+      <input type="text" id="edit-tfb-${index}" value="${fallback.join(',')}" placeholder="ws,h2,raw (逗号分隔)">
     </div>
   </div>
   <div class="section-title">🔁 重试</div>
@@ -289,6 +339,11 @@ const NodesPage = {
 </div>`;
   },
 
+  // 传输协议切换提示（可选扩展）
+  onTransportChange(prefix) {
+    // 未来可根据选中的传输协议显示/隐藏相关字段
+  },
+
   // ================================================================
   // 添加节点
   // ================================================================
@@ -302,6 +357,10 @@ const NodesPage = {
     if (!sni) { App.toast('SNI 不能为空', 'error'); return; }
     if (App.state.nodes.find(n => n.name === name)) { App.toast('节点名称已存在', 'error'); return; }
 
+    // 解析 transport fallback
+    const tfbStr = document.getElementById('new-node-transport-fallback')?.value?.trim() || '';
+    const transportFallback = tfbStr ? tfbStr.split(',').map(s => s.trim()).filter(s => s) : [];
+
     const node = {
       name,
       address,
@@ -312,7 +371,11 @@ const NodesPage = {
       transportOpts: {
         wsPath: document.getElementById('new-node-ws-path')?.value || '/',
         wsHost: document.getElementById('new-node-ws-host')?.value || '',
+        h2Path: document.getElementById('new-node-h2-path')?.value || '',
         socks5Addr: document.getElementById('new-node-socks5out')?.value || '',
+        socks5Username: document.getElementById('new-node-socks5out-user')?.value || '',
+        socks5Password: document.getElementById('new-node-socks5out-pass')?.value || '',
+        wsHeaders: {},
       },
       remoteProxy: {
         socks5: document.getElementById('new-node-remote-socks5')?.value || '',
@@ -330,6 +393,7 @@ const NodesPage = {
         idleTimeout: document.getElementById('new-node-pool-idle-timeout')?.value || '120s',
         maxLifetime: document.getElementById('new-node-pool-max-life')?.value || '10m',
       },
+      transportFallback: transportFallback,
     };
 
     App.state.nodes.push(node);
@@ -350,7 +414,8 @@ const NodesPage = {
 
   resetAddForm() {
     ['new-node-name','new-node-address','new-node-sni','new-node-ws-path','new-node-ws-host',
-     'new-node-socks5out','new-node-remote-socks5','new-node-remote-fallback'].forEach(id => {
+     'new-node-h2-path','new-node-socks5out','new-node-socks5out-user','new-node-socks5out-pass',
+     'new-node-remote-socks5','new-node-remote-fallback','new-node-transport-fallback'].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.value = '';
     });
@@ -384,11 +449,18 @@ const NodesPage = {
     if (!node.transportOpts) node.transportOpts = {};
     node.transportOpts.wsPath = g(`edit-wspath-${index}`);
     node.transportOpts.wsHost = g(`edit-wshost-${index}`);
+    node.transportOpts.h2Path = g(`edit-h2path-${index}`);
     node.transportOpts.socks5Addr = g(`edit-s5out-${index}`);
+    node.transportOpts.socks5Username = g(`edit-s5out-user-${index}`);
+    node.transportOpts.socks5Password = g(`edit-s5out-pass-${index}`);
 
     if (!node.remoteProxy) node.remoteProxy = {};
     node.remoteProxy.socks5 = g(`edit-rs5-${index}`);
     node.remoteProxy.fallback = g(`edit-rfb-${index}`);
+
+    // 解析 transport fallback
+    const tfbStr = g(`edit-tfb-${index}`);
+    node.transportFallback = tfbStr ? tfbStr.split(',').map(s => s.trim()).filter(s => s) : [];
 
     if (!node.retry) node.retry = {};
     node.retry.maxAttempts = parseInt(g(`edit-retry-max-${index}`)) || 3;
