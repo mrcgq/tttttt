@@ -136,7 +136,6 @@ func (s *Server) Start() error {
 	} else {
 		fileServer := http.FileServer(http.FS(webFS))
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-			// CORS 头
 			w.Header().Set("Access-Control-Allow-Origin", "*")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
@@ -146,7 +145,6 @@ func (s *Server) Start() error {
 				return
 			}
 
-			// 根路径返回 index.html
 			if r.URL.Path == "/" {
 				r.URL.Path = "/index.html"
 			}
@@ -184,7 +182,6 @@ func (s *Server) Stop() error {
 
 func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// CORS
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
@@ -196,7 +193,6 @@ func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 
 		atomic.AddInt64(&s.requests, 1)
 
-		// Token 验证
 		if s.Token != "" {
 			auth := r.Header.Get("Authorization")
 			if !strings.HasPrefix(auth, "Bearer ") || auth[7:] != s.Token {
@@ -378,7 +374,6 @@ func (s *Server) handleReload(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 
-	// 如果有配置管理器，触发重载
 	if s.configManager != nil {
 		currentCfg := s.configManager.Get()
 		if currentCfg != nil {
@@ -402,7 +397,6 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodGet:
-		// 返回完整配置
 		if s.configManager == nil {
 			s.mu.RLock()
 			basicConfig := map[string]any{
@@ -421,7 +415,6 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// 将配置转换为 JSON 格式返回
 		fullConfig := configToJSON(cfg)
 		s.mu.RLock()
 		fullConfig["current_profile"] = s.currentProfile
@@ -432,7 +425,6 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(fullConfig)
 
 	case http.MethodPost:
-		// 更新配置
 		if s.configManager == nil {
 			http.Error(w, "config manager not available", http.StatusServiceUnavailable)
 			return
@@ -444,14 +436,12 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// 将 JSON 转换为 config.Config
 		newCfg, err := jsonToConfig(newConfigJSON)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("invalid config: %v", err), http.StatusBadRequest)
 			return
 		}
 
-		// 更新配置并触发重载
 		if err := s.configManager.Update(newCfg); err != nil {
 			s.Logger.Error("config update failed", zap.Error(err))
 			_ = json.NewEncoder(w).Encode(map[string]any{
@@ -461,12 +451,10 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// 更新本地状态
 		s.mu.Lock()
 		if profile, ok := newConfigJSON["current_profile"].(string); ok && profile != "" {
 			s.currentProfile = profile
 		}
-		// 查找激活的节点
 		if nodes, ok := newConfigJSON["nodes"].([]any); ok {
 			for _, n := range nodes {
 				if node, ok := n.(map[string]any); ok {
@@ -497,12 +485,12 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 // ================================================================
-// configToJSON 将 config.Config 转换为 JSON 友好的 map（完整版）
+// configToJSON: Config → JSON map
+// 字段名严格对齐 pkg/config/types.go
 // ================================================================
 func configToJSON(cfg *config.Config) map[string]any {
 	nodes := make([]map[string]any, 0, len(cfg.Nodes))
 	for _, n := range cfg.Nodes {
-		// 构建 ws_headers
 		wsHeaders := n.TransportOpts.WSHeaders
 		if wsHeaders == nil {
 			wsHeaders = make(map[string]string)
@@ -545,22 +533,23 @@ func configToJSON(cfg *config.Config) map[string]any {
 		nodes = append(nodes, node)
 	}
 
-	// 构建 proxy_ips entries
+	// proxy_ips entries
 	proxyIPEntries := make([]map[string]any, 0, len(cfg.ProxyIPs.Entries))
 	for _, e := range cfg.ProxyIPs.Entries {
 		proxyIPEntries = append(proxyIPEntries, map[string]any{
-			"address": e.Address,
-			"sni":     e.SNI,
-			"weight":  e.Weight,
-			"enabled": e.Enabled,
-			"tag":     e.Tag,
+			"address":  e.Address,
+			"sni":      e.SNI,
+			"weight":   e.Weight,
+			"region":   e.Region,
+			"provider": e.Provider,
+			"enabled":  e.Enabled,
 		})
 	}
 
-	// 构建 fingerprint rotation weights
+	// fingerprint weights ([]int)
 	fpWeights := cfg.Fingerprint.Rotation.Weights
 	if fpWeights == nil {
-		fpWeights = make(map[string]int)
+		fpWeights = []int{}
 	}
 
 	return map[string]any{
@@ -630,9 +619,9 @@ func configToJSON(cfg *config.Config) map[string]any {
 			"enabled": cfg.ProxyIPs.Enabled,
 			"mode":    cfg.ProxyIPs.Mode,
 			"options": map[string]any{
-				"health_check_interval": cfg.ProxyIPs.Options.HealthCheckInterval,
-				"max_fail_count":        cfg.ProxyIPs.Options.MaxFailCount,
-				"recovery_time":         cfg.ProxyIPs.Options.RecoveryTime,
+				"check_period": cfg.ProxyIPs.Options.CheckPeriod,
+				"timeout":      cfg.ProxyIPs.Options.Timeout,
+				"max_fails":    cfg.ProxyIPs.Options.MaxFails,
 			},
 			"entries": proxyIPEntries,
 		},
@@ -641,14 +630,13 @@ func configToJSON(cfg *config.Config) map[string]any {
 }
 
 // ================================================================
-// jsonToConfig 将 JSON map 转换为 config.Config（完整版）
+// jsonToConfig: JSON map → Config
+// 字段名严格对齐 pkg/config/types.go
 // ================================================================
 func jsonToConfig(data map[string]any) (*config.Config, error) {
 	cfg := &config.Config{}
 
-	// ----------------------------------------------------------------
-	// 解析 global
-	// ----------------------------------------------------------------
+	// ---- global ----
 	if global, ok := data["global"].(map[string]any); ok {
 		if v, ok := global["log_level"].(string); ok {
 			cfg.Global.LogLevel = v
@@ -656,7 +644,6 @@ func jsonToConfig(data map[string]any) (*config.Config, error) {
 		if v, ok := global["log_output"].(string); ok {
 			cfg.Global.LogOutput = v
 		}
-		// 解析 metrics
 		if metrics, ok := global["metrics"].(map[string]any); ok {
 			if v, ok := metrics["enabled"].(bool); ok {
 				cfg.Global.Metrics.Enabled = v
@@ -667,9 +654,7 @@ func jsonToConfig(data map[string]any) (*config.Config, error) {
 		}
 	}
 
-	// ----------------------------------------------------------------
-	// 解析 inbound
-	// ----------------------------------------------------------------
+	// ---- inbound ----
 	if inbound, ok := data["inbound"].(map[string]any); ok {
 		if socks5, ok := inbound["socks5"].(map[string]any); ok {
 			if v, ok := socks5["listen"].(string); ok {
@@ -689,9 +674,7 @@ func jsonToConfig(data map[string]any) (*config.Config, error) {
 		}
 	}
 
-	// ----------------------------------------------------------------
-	// 解析 fingerprint
-	// ----------------------------------------------------------------
+	// ---- fingerprint ----
 	if fp, ok := data["fingerprint"].(map[string]any); ok {
 		if rotation, ok := fp["rotation"].(map[string]any); ok {
 			if v, ok := rotation["mode"].(string); ok {
@@ -711,26 +694,23 @@ func jsonToConfig(data map[string]any) (*config.Config, error) {
 			if v, ok := rotation["interval"].(string); ok {
 				cfg.Fingerprint.Rotation.Interval = v
 			}
-			// 解析 weights
-			if weights, ok := rotation["weights"].(map[string]any); ok {
-				cfg.Fingerprint.Rotation.Weights = make(map[string]int)
-				for k, v := range weights {
-					if f, ok := v.(float64); ok {
-						cfg.Fingerprint.Rotation.Weights[k] = int(f)
+			// weights: []int
+			if weights, ok := rotation["weights"].([]any); ok {
+				cfg.Fingerprint.Rotation.Weights = nil
+				for _, w := range weights {
+					if f, ok := w.(float64); ok {
+						cfg.Fingerprint.Rotation.Weights = append(cfg.Fingerprint.Rotation.Weights, int(f))
 					}
 				}
 			}
 		}
 	}
 
-	// ----------------------------------------------------------------
-	// 解析 tls
-	// ----------------------------------------------------------------
+	// ---- tls ----
 	if tlsCfg, ok := data["tls"].(map[string]any); ok {
 		if v, ok := tlsCfg["verify_mode"].(string); ok {
 			cfg.TLS.VerifyMode = v
 		}
-		// 解析 verify_opts
 		if opts, ok := tlsCfg["verify_opts"].(map[string]any); ok {
 			if v, ok := opts["cert_pin"].(string); ok {
 				cfg.TLS.VerifyOpts.CertPin = v
@@ -741,9 +721,7 @@ func jsonToConfig(data map[string]any) (*config.Config, error) {
 		}
 	}
 
-	// ----------------------------------------------------------------
-	// 解析 client_behavior
-	// ----------------------------------------------------------------
+	// ---- client_behavior ----
 	if cb, ok := data["client_behavior"].(map[string]any); ok {
 		if cadence, ok := cb["cadence"].(map[string]any); ok {
 			if v, ok := cadence["mode"].(string); ok {
@@ -758,7 +736,6 @@ func jsonToConfig(data map[string]any) (*config.Config, error) {
 			if v, ok := cadence["jitter"].(float64); ok {
 				cfg.ClientBehavior.Cadence.Jitter = v
 			}
-			// 解析 sequence
 			if seq, ok := cadence["sequence"].([]any); ok {
 				cfg.ClientBehavior.Cadence.Sequence = nil
 				for _, item := range seq {
@@ -784,9 +761,7 @@ func jsonToConfig(data map[string]any) (*config.Config, error) {
 		}
 	}
 
-	// ----------------------------------------------------------------
-	// 解析 api
-	// ----------------------------------------------------------------
+	// ---- api ----
 	if apiCfg, ok := data["api"].(map[string]any); ok {
 		if v, ok := apiCfg["enabled"].(bool); ok {
 			cfg.API.Enabled = v
@@ -799,9 +774,7 @@ func jsonToConfig(data map[string]any) (*config.Config, error) {
 		}
 	}
 
-	// ----------------------------------------------------------------
-	// 解析 health
-	// ----------------------------------------------------------------
+	// ---- health ----
 	if healthCfg, ok := data["health"].(map[string]any); ok {
 		if v, ok := healthCfg["enabled"].(bool); ok {
 			cfg.Health.Enabled = v
@@ -823,9 +796,7 @@ func jsonToConfig(data map[string]any) (*config.Config, error) {
 		}
 	}
 
-	// ----------------------------------------------------------------
-	// 解析 proxy_ips
-	// ----------------------------------------------------------------
+	// ---- proxy_ips ----
 	if proxyIPs, ok := data["proxy_ips"].(map[string]any); ok {
 		if v, ok := proxyIPs["enabled"].(bool); ok {
 			cfg.ProxyIPs.Enabled = v
@@ -833,19 +804,17 @@ func jsonToConfig(data map[string]any) (*config.Config, error) {
 		if v, ok := proxyIPs["mode"].(string); ok {
 			cfg.ProxyIPs.Mode = v
 		}
-		// 解析 options
 		if options, ok := proxyIPs["options"].(map[string]any); ok {
-			if v, ok := options["health_check_interval"].(string); ok {
-				cfg.ProxyIPs.Options.HealthCheckInterval = v
+			if v, ok := options["check_period"].(string); ok {
+				cfg.ProxyIPs.Options.CheckPeriod = v
 			}
-			if v, ok := options["max_fail_count"].(float64); ok {
-				cfg.ProxyIPs.Options.MaxFailCount = int(v)
+			if v, ok := options["timeout"].(string); ok {
+				cfg.ProxyIPs.Options.Timeout = v
 			}
-			if v, ok := options["recovery_time"].(string); ok {
-				cfg.ProxyIPs.Options.RecoveryTime = v
+			if v, ok := options["max_fails"].(float64); ok {
+				cfg.ProxyIPs.Options.MaxFails = int(v)
 			}
 		}
-		// 解析 entries
 		if entries, ok := proxyIPs["entries"].([]any); ok {
 			cfg.ProxyIPs.Entries = nil
 			for _, item := range entries {
@@ -860,11 +829,14 @@ func jsonToConfig(data map[string]any) (*config.Config, error) {
 					if v, ok := entryMap["weight"].(float64); ok {
 						entry.Weight = int(v)
 					}
+					if v, ok := entryMap["region"].(string); ok {
+						entry.Region = v
+					}
+					if v, ok := entryMap["provider"].(string); ok {
+						entry.Provider = v
+					}
 					if v, ok := entryMap["enabled"].(bool); ok {
 						entry.Enabled = v
-					}
-					if v, ok := entryMap["tag"].(string); ok {
-						entry.Tag = v
 					}
 					cfg.ProxyIPs.Entries = append(cfg.ProxyIPs.Entries, entry)
 				}
@@ -872,9 +844,7 @@ func jsonToConfig(data map[string]any) (*config.Config, error) {
 		}
 	}
 
-	// ----------------------------------------------------------------
-	// 解析 nodes
-	// ----------------------------------------------------------------
+	// ---- nodes ----
 	if nodes, ok := data["nodes"].([]any); ok {
 		cfg.Nodes = nil
 		for _, n := range nodes {
@@ -900,7 +870,7 @@ func jsonToConfig(data map[string]any) (*config.Config, error) {
 					node.Active = v
 				}
 
-				// transport_opts — 完整解析
+				// transport_opts
 				if opts, ok := nodeMap["transport_opts"].(map[string]any); ok {
 					if v, ok := opts["ws_path"].(string); ok {
 						node.TransportOpts.WSPath = v
@@ -920,7 +890,6 @@ func jsonToConfig(data map[string]any) (*config.Config, error) {
 					if v, ok := opts["socks5_password"].(string); ok {
 						node.TransportOpts.SOCKS5Password = v
 					}
-					// ws_headers
 					if headers, ok := opts["ws_headers"].(map[string]any); ok {
 						node.TransportOpts.WSHeaders = make(map[string]string)
 						for k, v := range headers {
