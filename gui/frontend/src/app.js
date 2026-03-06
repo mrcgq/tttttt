@@ -1,6 +1,6 @@
 /**
  * TLS-Client GUI 桌面版主应用
- * 版本: v4.2 - 修复完整配置同步和字段映射
+ * 版本: v4.3 - 字段名严格对齐 types.go
  */
 const App = {
   currentPage: 'dashboard',
@@ -10,7 +10,7 @@ const App = {
     selectedFingerprint: 'chrome-126-win',
     rotationMode: 'fixed',
     rotationInterval: '',
-    rotationWeights: {},
+    rotationWeights: [],
     tlsVerifyMode: 'sni-skip',
     tlsCertPin: '',
     tlsCustomCA: '',
@@ -30,13 +30,13 @@ const App = {
     transportFallback: 'ws,h2,raw',
     apiAddress: 'http://127.0.0.1:9090',
     apiToken: '',
-    // ProxyIP 池
+    // ProxyIP 池 — 字段对齐 ProxyIPOptions
     proxyIPEnabled: false,
     proxyIPMode: 'round-robin',
     proxyIPOptions: {
-      healthCheckInterval: '30s',
-      maxFailCount: 3,
-      recoveryTime: '5m',
+      checkPeriod: '30s',
+      timeout: '10s',
+      maxFails: 3,
     },
     proxyIPEntries: [],
     // Metrics
@@ -125,9 +125,9 @@ const App = {
     t.className = `toast toast-${type}`;
     t.innerHTML = `<span>${message}</span><button class="toast-close" onclick="this.parentElement.remove()">×</button>`;
     c.appendChild(t);
-    setTimeout(() => { 
-      t.style.animation = 'toast-out .3s ease forwards'; 
-      setTimeout(() => t.remove(), 300); 
+    setTimeout(() => {
+      t.style.animation = 'toast-out .3s ease forwards';
+      setTimeout(() => t.remove(), 300);
     }, 4000);
   },
 
@@ -136,9 +136,9 @@ const App = {
     if (!ind) return;
     const dot = ind.querySelector('.indicator-dot');
     const txt = ind.querySelector('.indicator-text');
-    if (dot) { 
-      dot.classList.toggle('connected', connected); 
-      dot.classList.toggle('disconnected', !connected); 
+    if (dot) {
+      dot.classList.toggle('connected', connected);
+      dot.classList.toggle('disconnected', !connected);
     }
     if (txt) txt.textContent = connected ? '已连接' : '未连接';
   },
@@ -154,8 +154,8 @@ const App = {
     const blob = new Blob([content], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; 
-    a.download = name; 
+    a.href = url;
+    a.download = name;
     a.click();
     URL.revokeObjectURL(url);
   },
@@ -170,9 +170,7 @@ const App = {
       const fullConfig = await API.getConfig();
       if (!fullConfig) return;
 
-      // ----------------------------------------------------------------
       // 同步节点列表
-      // ----------------------------------------------------------------
       if (fullConfig.nodes && Array.isArray(fullConfig.nodes)) {
         this.state.nodes = fullConfig.nodes.map(n => ({
           name: n.name || '',
@@ -211,9 +209,7 @@ const App = {
         console.log('App.state.nodes updated:', this.state.nodes);
       }
 
-      // ----------------------------------------------------------------
       // 同步入站配置
-      // ----------------------------------------------------------------
       if (fullConfig.inbound) {
         if (fullConfig.inbound.socks5) {
           this.state.socks5Listen = fullConfig.inbound.socks5.listen || '127.0.0.1:1080';
@@ -225,21 +221,17 @@ const App = {
         }
       }
 
-      // ----------------------------------------------------------------
       // 同步指纹配置
-      // ----------------------------------------------------------------
       if (fullConfig.fingerprint?.rotation) {
         this.state.rotationMode = fullConfig.fingerprint.rotation.mode || 'fixed';
         this.state.selectedFingerprint = fullConfig.fingerprint.rotation.profile || 'chrome-126-win';
         this.state.rotationInterval = fullConfig.fingerprint.rotation.interval || '';
-        if (fullConfig.fingerprint.rotation.weights) {
+        if (Array.isArray(fullConfig.fingerprint.rotation.weights)) {
           this.state.rotationWeights = fullConfig.fingerprint.rotation.weights;
         }
       }
 
-      // ----------------------------------------------------------------
       // 同步 TLS 配置
-      // ----------------------------------------------------------------
       if (fullConfig.tls) {
         this.state.tlsVerifyMode = fullConfig.tls.verify_mode || 'sni-skip';
         if (fullConfig.tls.verify_opts) {
@@ -248,9 +240,7 @@ const App = {
         }
       }
 
-      // ----------------------------------------------------------------
       // 同步客户端行为配置
-      // ----------------------------------------------------------------
       if (fullConfig.client_behavior) {
         if (fullConfig.client_behavior.cadence) {
           this.state.cadenceMode = fullConfig.client_behavior.cadence.mode || 'none';
@@ -269,25 +259,21 @@ const App = {
         this.state.maxRedirects = fullConfig.client_behavior.max_redirects || 10;
       }
 
-      // ----------------------------------------------------------------
-      // 同步 Global 配置
-      // ----------------------------------------------------------------
+      // 同步 Global Metrics
       if (fullConfig.global?.metrics) {
         this.state.metricsEnabled = fullConfig.global.metrics.enabled || false;
         this.state.metricsEndpoint = fullConfig.global.metrics.endpoint || '';
       }
 
-      // ----------------------------------------------------------------
-      // 同步 ProxyIP 配置
-      // ----------------------------------------------------------------
+      // 同步 ProxyIP 配置 — 字段对齐 types.go
       if (fullConfig.proxy_ips) {
         this.state.proxyIPEnabled = fullConfig.proxy_ips.enabled || false;
         this.state.proxyIPMode = fullConfig.proxy_ips.mode || 'round-robin';
         if (fullConfig.proxy_ips.options) {
           this.state.proxyIPOptions = {
-            healthCheckInterval: fullConfig.proxy_ips.options.health_check_interval || '30s',
-            maxFailCount: fullConfig.proxy_ips.options.max_fail_count || 3,
-            recoveryTime: fullConfig.proxy_ips.options.recovery_time || '5m',
+            checkPeriod: fullConfig.proxy_ips.options.check_period || '30s',
+            timeout: fullConfig.proxy_ips.options.timeout || '10s',
+            maxFails: fullConfig.proxy_ips.options.max_fails || 3,
           };
         }
         if (fullConfig.proxy_ips.entries && Array.isArray(fullConfig.proxy_ips.entries)) {
@@ -295,20 +281,18 @@ const App = {
             address: e.address || '',
             sni: e.sni || '',
             weight: e.weight || 1,
+            region: e.region || '',
+            provider: e.provider || '',
             enabled: e.enabled !== false,
-            tag: e.tag || '',
           }));
         }
       }
 
-      // ----------------------------------------------------------------
       // 同步当前活跃配置
-      // ----------------------------------------------------------------
       if (fullConfig.current_profile) {
         this.state.selectedFingerprint = fullConfig.current_profile;
       }
       if (fullConfig.current_node) {
-        // 标记当前活跃节点
         this.state.nodes.forEach(n => {
           n.active = (n.name === fullConfig.current_node);
         });
@@ -322,12 +306,11 @@ const App = {
   },
 
   // ================================================================
-  // 构建完整配置对象用于发送到核心引擎（完整版）
+  // 构建完整配置对象 — 字段对齐 types.go
   // ================================================================
   buildFullConfig() {
     const s = this.state;
 
-    // 构建序列数组
     let sequenceArray = [];
     if (s.cadenceSeq && s.cadenceSeq.trim()) {
       sequenceArray = s.cadenceSeq.split(',').map(v => v.trim()).filter(v => v);
@@ -357,8 +340,8 @@ const App = {
           mode: s.rotationMode,
           profile: s.selectedFingerprint,
           profiles: s.fingerprints.map(f => f.name),
-          interval: s.rotationInterval,
-          weights: s.rotationWeights || {},
+          interval: s.rotationInterval || '',
+          weights: s.rotationWeights || [],
         },
       },
       tls: {
@@ -394,16 +377,17 @@ const App = {
         enabled: s.proxyIPEnabled,
         mode: s.proxyIPMode,
         options: {
-          health_check_interval: s.proxyIPOptions?.healthCheckInterval || '30s',
-          max_fail_count: s.proxyIPOptions?.maxFailCount || 3,
-          recovery_time: s.proxyIPOptions?.recoveryTime || '5m',
+          check_period: s.proxyIPOptions?.checkPeriod || '30s',
+          timeout: s.proxyIPOptions?.timeout || '10s',
+          max_fails: s.proxyIPOptions?.maxFails || 3,
         },
         entries: (s.proxyIPEntries || []).map(e => ({
           address: e.address,
           sni: e.sni || '',
           weight: e.weight || 1,
+          region: e.region || '',
+          provider: e.provider || '',
           enabled: e.enabled !== false,
-          tag: e.tag || '',
         })),
       },
       nodes: s.nodes.map(n => ({
@@ -456,7 +440,7 @@ const App = {
     try {
       const fullConfig = this.buildFullConfig();
       this.log('debug', '发送配置到引擎: ' + JSON.stringify(fullConfig).substring(0, 200) + '...');
-      
+
       const result = await API.postConfig(fullConfig);
 
       if (result && result.success) {
@@ -479,20 +463,17 @@ const App = {
   // 初始化应用
   // ================================================================
   async init() {
-    // 侧边栏折叠
     document.getElementById('sidebar-toggle')?.addEventListener('click', () => {
       document.getElementById('sidebar')?.classList.toggle('collapsed');
     });
 
-    // 导航
     document.querySelectorAll('.nav-link').forEach(link => {
-      link.addEventListener('click', e => { 
-        e.preventDefault(); 
-        this.navigate(link.dataset.page); 
+      link.addEventListener('click', e => {
+        e.preventDefault();
+        this.navigate(link.dataset.page);
       });
     });
 
-    // 时钟
     const updateClock = () => {
       const el = document.getElementById('topbar-clock');
       if (el) el.textContent = new Date().toLocaleTimeString('zh-CN', { hour12: false });
@@ -500,51 +481,41 @@ const App = {
     updateClock();
     setInterval(updateClock, 1000);
 
-    // 平台标识
     try {
       const info = await API.getSystemInfo();
       const plat = document.getElementById('topbar-platform');
       if (plat) plat.textContent = `${info.os}/${info.arch}`;
       if (info.os === 'darwin') document.body.classList.add('darwin');
     } catch (e) {
-      // 非 Wails 环境下忽略
       console.log('Not running in Wails environment');
     }
 
-    // ================================================================
-    // 引擎事件监听 + 自动轮询
-    // ================================================================
     if (window.runtime) {
-      // 引擎日志输出
       window.runtime.EventsOn('engine:log', (line) => {
         if (line && line.trim()) {
           this.log('debug', line.trim());
         }
       });
 
-      // 引擎已停止
       window.runtime.EventsOn('engine:stopped', () => {
         this.state.localEngineRunning = false;
         this.state.engineRunning = false;
         this.toast('本地引擎已停止', 'warning');
         this.log('warn', '本地引擎已停止');
 
-        // 同步前端 API 连接状态
         API.connected = false;
         API.stopPolling();
         this.updateApiIndicator(false);
 
-        // 更新仪表盘 UI
         const el = document.getElementById('dash-status');
         if (el) {
           el.textContent = '已停止';
           el.className = 'stat-value red';
         }
 
-        // 清零其他指标
-        const setZero = (id, v) => { 
-          const e = document.getElementById(id); 
-          if (e) e.textContent = v; 
+        const setZero = (id, v) => {
+          const e = document.getElementById(id);
+          if (e) e.textContent = v;
         };
         setZero('dash-uptime', '—');
         setZero('dash-conns', '0');
@@ -553,21 +524,17 @@ const App = {
         setZero('dash-mem', '0 MB');
       });
 
-      // 引擎已就绪 — API 可用
       window.runtime.EventsOn('engine:ready', async () => {
         this.state.localEngineRunning = true;
         this.state.engineRunning = true;
         this.toast('本地引擎已就绪，数据已连接', 'success');
         this.log('info', '本地引擎已就绪，API 连接成功');
 
-        // 同步前端 API 连接状态为 true
         API.connected = true;
         this.updateApiIndicator(true);
 
-        // 从核心引擎获取配置并同步到前端状态
         await this.fetchAndApplyConfig();
 
-        // 立刻获取一次状态，替换 "启动中..."
         try {
           const data = await API.getStatus();
           if (DashboardPage && DashboardPage.updateFromAPI) {
@@ -577,7 +544,6 @@ const App = {
           this.log('error', '获取初始状态失败: ' + e);
         }
 
-        // 启动定时轮询：每 2 秒拉取一次最新数据
         API.startPolling((data, err) => {
           if (data) {
             if (DashboardPage && DashboardPage.updateFromAPI) {
@@ -590,7 +556,6 @@ const App = {
         }, 2000);
       });
 
-      // 引擎启动超时
       window.runtime.EventsOn('engine:timeout', () => {
         this.toast('引擎启动超时，API 未响应', 'error');
         this.log('error', '引擎启动超时（15秒内未检测到 API）');
@@ -602,14 +567,10 @@ const App = {
       });
     }
 
-    // 渲染首页
     this.navigate(this.currentPage);
-    this.log('info', 'TLS-Client 桌面版 v4.2 已加载');
+    this.log('info', 'TLS-Client 桌面版 v4.3 已加载');
     this.log('info', `${this.state.fingerprints.length} 个指纹, ${this.state.nodes.length} 个节点`);
   }
 };
 
-// ================================================================
-// 应用启动
-// ================================================================
 document.addEventListener('DOMContentLoaded', () => App.init());
