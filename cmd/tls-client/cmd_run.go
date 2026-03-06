@@ -193,8 +193,8 @@ func runProxy(cmd *cobra.Command, args []string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// 初始化组件
-	components, err := initComponents(ctx, cfg, selector, vmode, logger)
+	// 初始化组件（首次启动，isReload=false）
+	components, err := initComponents(ctx, cfg, selector, vmode, logger, false, nil)
 	if err != nil {
 		return err
 	}
@@ -270,6 +270,8 @@ func initFingerprintSelector(cfg *config.Config) (fingerprint.Selector, error) {
 
 // ================================================================
 // 初始化所有组件
+// isReload: 是否为热重载（true 时跳过 API Server 创建）
+// existingAPI: 热重载时复用的 API Server 实例
 // ================================================================
 
 func initComponents(
@@ -278,6 +280,8 @@ func initComponents(
 	selector fingerprint.Selector,
 	vmode verify.Mode,
 	logger *zap.Logger,
+	isReload bool,
+	existingAPI *api.Server,
 ) (*Components, error) {
 	comp := &Components{}
 
@@ -351,9 +355,14 @@ func initComponents(
 	}
 
 	// ----------------------------------------------------------------
-	// 初始化 API 服务器
+	// 初始化 API 服务器（仅首次启动时创建，热重载时复用）
 	// ----------------------------------------------------------------
-	if cfg.API.Enabled {
+	if isReload && existingAPI != nil {
+		// 热重载：复用现有 API Server，不重新创建
+		comp.apiServer = existingAPI
+		logger.Info("api server reused (hot reload)")
+	} else if cfg.API.Enabled {
+		// 首次启动：创建新的 API Server
 		comp.apiServer = api.NewServer(cfg.API.Listen, cfg.API.Token, logger)
 		if comp.checker != nil {
 			comp.apiServer.SetHealthChecker(comp.checker)
@@ -425,6 +434,11 @@ func initComponents(
 		comp.apiServer.SetCurrentNode(node.Name)
 		comp.apiServer.SetCurrentProfile(nodeProfile.Name)
 		comp.apiServer.SetEngineRunning(true)
+
+		// 热重载时更新健康检查器引用
+		if comp.checker != nil {
+			comp.apiServer.SetHealthChecker(comp.checker)
+		}
 	}
 
 	// ----------------------------------------------------------------
@@ -469,7 +483,7 @@ func initComponents(
 }
 
 // ================================================================
-// 关闭所有组件
+// 关闭所有组件（不关闭 API Server，除非完全退出）
 // ================================================================
 
 func shutdownComponents(comp *Components, logger *zap.Logger) {
@@ -509,6 +523,35 @@ func shutdownComponents(comp *Components, logger *zap.Logger) {
 	}
 }
 
+// shutdownReloadableComponents 关闭可重载的组件（保留 API Server）
+func shutdownReloadableComponents(comp *Components, logger *zap.Logger) {
+	if comp == nil {
+		return
+	}
+
+	if comp.socks5 != nil {
+		comp.socks5.Stop()
+		logger.Debug("socks5 server stopped (reload)")
+	}
+	if comp.httpProxy != nil {
+		comp.httpProxy.Stop()
+		logger.Debug("http proxy server stopped (reload)")
+	}
+	if comp.tunnel != nil {
+		comp.tunnel.Close()
+		logger.Debug("tunnel closed (reload)")
+	}
+	if comp.checker != nil {
+		comp.checker.Stop()
+		logger.Debug("health checker stopped (reload)")
+	}
+	if comp.proxyIPMgr != nil {
+		comp.proxyIPMgr.Stop()
+		logger.Debug("proxy ip manager stopped (reload)")
+	}
+	// 注意：不关闭 apiServer，热重载时复用
+}
+
 // ================================================================
 // 重载循环
 // ================================================================
@@ -521,12 +564,8 @@ func reloadLoop(ctx context.Context, cm *ConfigManager, logger *zap.Logger) {
 		case newCfg := <-cm.ReloadChannel():
 			logger.Info("reloading configuration...")
 
-			// 获取旧组件
-			oldSocks5 := cm.socks5Server
-			oldHTTP := cm.httpServer
-			oldTunnel := cm.tunnel
-			oldChecker := cm.healthChecker
-			oldProxyIP := cm.proxyIPMgr
+			// 保存当前 API Server 引用（热重载时复用）
+			existingAPI := cm.apiServer
 
 			// 解析新配置
 			vmode, err := verify.ParseMode(newCfg.TLS.VerifyMode)
@@ -541,30 +580,24 @@ func reloadLoop(ctx context.Context, cm *ConfigManager, logger *zap.Logger) {
 				continue
 			}
 
-			// 初始化新组件
-			newComp, err := initComponents(ctx, newCfg, selector, vmode, logger)
+			// 初始化新组件（isReload=true，复用 API Server）
+			newComp, err := initComponents(ctx, newCfg, selector, vmode, logger, true, existingAPI)
 			if err != nil {
 				logger.Error("failed to init new components, keeping old config", zap.Error(err))
 				// 回滚：如果新组件初始化失败，不关闭旧组件
 				continue
 			}
 
-			// 关闭旧组件（在新组件启动成功后）
-			if oldSocks5 != nil {
-				oldSocks5.Stop()
+			// 关闭旧的可重载组件（在新组件启动成功后，保留 API Server）
+			oldComp := &Components{
+				socks5:     cm.socks5Server,
+				httpProxy:  cm.httpServer,
+				tunnel:     cm.tunnel,
+				checker:    cm.healthChecker,
+				proxyIPMgr: cm.proxyIPMgr,
+				// apiServer 不放入，不关闭
 			}
-			if oldHTTP != nil {
-				oldHTTP.Stop()
-			}
-			if oldTunnel != nil {
-				oldTunnel.Close()
-			}
-			if oldChecker != nil {
-				oldChecker.Stop()
-			}
-			if oldProxyIP != nil {
-				oldProxyIP.Stop()
-			}
+			shutdownReloadableComponents(oldComp, logger)
 
 			// 更新组件引用
 			cm.socks5Server = newComp.socks5
@@ -572,11 +605,7 @@ func reloadLoop(ctx context.Context, cm *ConfigManager, logger *zap.Logger) {
 			cm.tunnel = newComp.tunnel
 			cm.healthChecker = newComp.checker
 			cm.proxyIPMgr = newComp.proxyIPMgr
-
-			// 更新 API 服务器的健康检查器引用
-			if cm.apiServer != nil && newComp.checker != nil {
-				cm.apiServer.SetHealthChecker(newComp.checker)
-			}
+			// apiServer 保持不变
 
 			logger.Info("configuration reloaded successfully",
 				zap.String("socks5_listen", newCfg.Inbound.SOCKS5.Listen),
