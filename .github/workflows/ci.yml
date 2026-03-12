@@ -14,6 +14,8 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.24.x"
+       env:
+          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true 
       
       # 确保 webui 目录存在
       - name: Ensure webui directory exists
