@@ -37,6 +37,24 @@ func init() {
 }
 
 // ================================================================
+// tunnelStatsAdapter 适配 outbound.TunnelManager 到 api.TunnelStatsProvider
+// ================================================================
+
+type tunnelStatsAdapter struct {
+	tunnel *outbound.TunnelManager
+}
+
+func (a *tunnelStatsAdapter) Stats() api.TunnelStats {
+	s := a.tunnel.Stats()
+	return api.TunnelStats{
+		ActiveConns: s.ActiveConns,
+		TotalConns:  s.TotalConns,
+		TotalBytes:  s.TotalBytes,
+		TotalErrors: s.TotalErrors,
+	}
+}
+
+// ================================================================
 // ConfigManager — 支持热重载
 // ================================================================
 
@@ -170,6 +188,11 @@ func runProxy(cmd *cobra.Command, args []string) error {
 	globalConfigManager.healthChecker = components.checker
 	globalConfigManager.apiServer = components.apiServer
 	globalConfigManager.proxyIPMgr = components.proxyIPMgr
+
+	// 【新增】将隧道统计注入 API Server，让仪表盘显示真实数据
+	if components.apiServer != nil && components.tunnel != nil {
+		components.apiServer.SetTunnelStats(&tunnelStatsAdapter{tunnel: components.tunnel})
+	}
 
 	go reloadLoop(ctx, globalConfigManager, logger)
 
@@ -530,6 +553,11 @@ func reloadLoop(ctx context.Context, cm *ConfigManager, logger *zap.Logger) {
 			cm.healthChecker = newComp.checker
 			cm.proxyIPMgr = newComp.proxyIPMgr
 
+			// 【新增】将最新的隧道统计注入 API Server，让仪表盘显示真实数据
+			if cm.apiServer != nil && newComp.tunnel != nil {
+				cm.apiServer.SetTunnelStats(&tunnelStatsAdapter{tunnel: newComp.tunnel})
+			}
+
 			logger.Info("configuration reloaded successfully",
 				zap.String("socks5_listen", newCfg.Inbound.SOCKS5.Listen),
 				zap.String("http_listen", newCfg.Inbound.HTTP.Listen),
@@ -544,11 +572,12 @@ func reloadLoop(ctx context.Context, cm *ConfigManager, logger *zap.Logger) {
 // ================================================================
 
 type ProxyIPManager struct {
-	entries []*proxyIPEntry
-	mode    string
-	current int
-	logger  *zap.Logger
-	stopCh  chan struct{}
+	entries   []*proxyIPEntry
+	mode      string
+	current   int
+	logger    *zap.Logger
+	stopCh    chan struct{}
+	closeOnce sync.Once
 }
 
 type proxyIPEntry struct {
@@ -583,7 +612,9 @@ func NewProxyIPManager(cfg config.ProxyIPPoolConfig, logger *zap.Logger) *ProxyI
 func (m *ProxyIPManager) Start() {}
 
 func (m *ProxyIPManager) Stop() {
-	close(m.stopCh)
+	m.closeOnce.Do(func() {
+		close(m.stopCh)
+	})
 }
 
 func (m *ProxyIPManager) Select() *outbound.ProxyIPEntry {
