@@ -9,13 +9,13 @@ on:
 jobs:
   lint:
     runs-on: ubuntu-latest
+    env: # <-- 添加 env 块在这里
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: "1.24.x"
-       env:
-          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true 
       
       # 确保 webui 目录存在
       - name: Ensure webui directory exists
@@ -31,6 +31,8 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    env: # <-- 添加 env 块在这里
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -52,12 +54,14 @@ jobs:
         uses: codecov/codecov-action@v4
         with:
           files: coverage.txt
-        env:
+        env: # <-- 这里有一个嵌套的 env，它只对 codecov-action 生效，是正确的
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
         continue-on-error: true
 
   security:
     runs-on: ubuntu-latest
+    env: # <-- 添加 env 块在这里
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -82,6 +86,8 @@ jobs:
 
   verify-webui-embed:
     runs-on: ubuntu-latest
+    env: # <-- 添加 env 块在这里
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -136,6 +142,8 @@ jobs:
             goarch: amd64
           - goos: freebsd
             goarch: amd64
+    env: # <-- 添加 env 块在这里
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -163,6 +171,8 @@ jobs:
   build-artifacts:
     needs: [verify-webui-embed]
     runs-on: ubuntu-latest
+    env: # <-- 添加 env 块在这里
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -228,6 +238,8 @@ jobs:
 
   integration-fingerprint:
     runs-on: ubuntu-latest
+    env: # <-- 添加 env 块在这里
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
