@@ -26,6 +26,7 @@ type HTTPProxyServer struct {
 	listener    net.Listener
 	wg          sync.WaitGroup
 	closeCh     chan struct{}
+	closeOnce   sync.Once // 防止重复关闭 closeCh
 	activeConns int64
 	totalConns  int64
 }
@@ -82,12 +83,30 @@ func (s *HTTPProxyServer) Start() error {
 	return nil
 }
 
+// Stop 停止服务器 — 带 8 秒超时熔断，用 sync.Once 防止重复关闭
 func (s *HTTPProxyServer) Stop() {
-	close(s.closeCh)
+	s.closeOnce.Do(func() {
+		close(s.closeCh)
+	})
+
 	if s.listener != nil {
 		s.listener.Close()
 	}
-	s.wg.Wait()
+
+	// 带超时的等待，防止卡死
+	done := make(chan struct{})
+	go func() {
+		s.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// 正常退出
+	case <-time.After(8 * time.Second):
+		s.Logger.Warn("httpproxy: stop timed out after 8s, forcing shutdown")
+	}
+
 	s.Logger.Info("http proxy server stopped",
 		zap.Int64("total_connections", atomic.LoadInt64(&s.totalConns)))
 }
