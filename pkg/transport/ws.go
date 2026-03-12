@@ -54,7 +54,6 @@ func (t *WSTransport) Wrap(conn net.Conn, cfg *Config) (net.Conn, error) {
 	}
 	wsKey := base64.StdEncoding.EncodeToString(keyBytes)
 
-	// 构建干净的 WebSocket 升级请求
 	reqStr := fmt.Sprintf("GET %s HTTP/1.1\r\n", path)
 	reqStr += fmt.Sprintf("Host: %s\r\n", host)
 	reqStr += "Upgrade: websocket\r\n"
@@ -62,15 +61,12 @@ func (t *WSTransport) Wrap(conn net.Conn, cfg *Config) (net.Conn, error) {
 	reqStr += fmt.Sprintf("Sec-WebSocket-Key: %s\r\n", wsKey)
 	reqStr += "Sec-WebSocket-Version: 13\r\n"
 
-	// User-Agent 只在非空时发送
 	if cfg.UserAgent != "" {
 		reqStr += fmt.Sprintf("User-Agent: %s\r\n", cfg.UserAgent)
 	}
 
-	// Origin 头帮助绕过某些 CORS 检查
 	reqStr += fmt.Sprintf("Origin: https://%s\r\n", host)
 
-	// 额外的自定义头部
 	for k, v := range cfg.Headers {
 		reqStr += fmt.Sprintf("%s: %s\r\n", k, v)
 	}
@@ -113,7 +109,6 @@ func (t *WSTransport) Wrap(conn net.Conn, cfg *Config) (net.Conn, error) {
 }
 
 // buildXlinkHeader 构建 Xlink 协议头
-// 格式: [HostLen:1][Host:N][Port:2][S5Len:1][S5:M][FBLen:1][FB:K]
 func buildXlinkHeader(target, socks5, fallback string) []byte {
 	host, portStr, err := net.SplitHostPort(target)
 	if err != nil {
@@ -130,7 +125,6 @@ func buildXlinkHeader(target, socks5, fallback string) []byte {
 	s5Bytes := []byte(socks5)
 	fbBytes := []byte(fallback)
 
-	// 长度限制检查
 	if len(hostBytes) > 255 {
 		hostBytes = hostBytes[:255]
 	}
@@ -143,22 +137,18 @@ func buildXlinkHeader(target, socks5, fallback string) []byte {
 
 	buf := new(bytes.Buffer)
 
-	// [HostLen:1][Host:N]
 	buf.WriteByte(byte(len(hostBytes)))
 	buf.Write(hostBytes)
 
-	// [Port:2] - Big Endian
 	portBytes := make([]byte, 2)
 	binary.BigEndian.PutUint16(portBytes, uint16(port))
 	buf.Write(portBytes)
 
-	// [S5Len:1][S5:M]
 	buf.WriteByte(byte(len(s5Bytes)))
 	if len(s5Bytes) > 0 {
 		buf.Write(s5Bytes)
 	}
 
-	// [FBLen:1][FB:K]
 	buf.WriteByte(byte(len(fbBytes)))
 	if len(fbBytes) > 0 {
 		buf.Write(fbBytes)
@@ -195,6 +185,9 @@ type wsConn struct {
 	closeCh   chan struct{}
 	closeOnce sync.Once
 
+	// keepAlive 协程的 WaitGroup，确保关闭时等待退出
+	kaWg sync.WaitGroup
+
 	readBuf []byte
 	readEOF bool
 }
@@ -210,6 +203,9 @@ func newWSConn(conn net.Conn, br *bufio.Reader) *wsConn {
 }
 
 func (c *wsConn) keepAlive() {
+	c.kaWg.Add(1)
+	defer c.kaWg.Done()
+
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
@@ -328,13 +324,13 @@ func (c *wsConn) Write(p []byte) (int, error) {
 		var fin bool
 
 		if isFirstFrame && isLastFrame {
-			opcode = 0x02 // binary
+			opcode = 0x02
 			fin = true
 		} else if isFirstFrame && !isLastFrame {
 			opcode = 0x02
 			fin = false
 		} else if !isFirstFrame && isLastFrame {
-			opcode = 0x00 // continuation
+			opcode = 0x00
 			fin = true
 		} else {
 			opcode = 0x00
@@ -353,13 +349,20 @@ func (c *wsConn) Write(p []byte) (int, error) {
 	return total, nil
 }
 
+// Close 关闭 WebSocket 连接 — 先发关闭信号让 keepAlive 退出，再等待
 func (c *wsConn) Close() error {
 	c.closeOnce.Do(func() {
 		close(c.closeCh)
+
+		// 发送 WebSocket 关闭帧
 		c.writeMu.Lock()
 		_, _ = WriteCloseFrame(c.conn, 1000)
 		c.writeMu.Unlock()
 	})
+
+	// 等待 keepAlive 协程退出
+	c.kaWg.Wait()
+
 	return c.conn.Close()
 }
 
