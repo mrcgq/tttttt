@@ -4,7 +4,7 @@ on:
   push:
     tags:
       - "v*"
-  # 新增：允许手动触发
+  # 允许手动触发
   workflow_dispatch:
     inputs:
       version:
@@ -15,11 +15,14 @@ on:
 permissions:
   contents: write
 
+# 全局环境变量
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  GO_VERSION: "1.24.x"
+
 jobs:
   release:
     runs-on: ubuntu-latest
-    env: # <-- 将 env 块放在这里，与 runs-on 平级，且比 steps 少一个缩进层级
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - uses: actions/checkout@v4
         with:
@@ -27,7 +30,7 @@ jobs:
       
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.24.x"
+          go-version: ${{ env.GO_VERSION }}
       
       - name: Set version
         id: version
@@ -44,5 +47,5 @@ jobs:
           distribution: goreleaser
           version: latest
           args: release --clean
-        env: # <-- 注意：这里 GoReleaser 自己的 env 块已经存在，这是正确的。
+        env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
