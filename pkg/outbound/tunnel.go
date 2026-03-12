@@ -32,7 +32,7 @@ type NodeConfig struct {
 	Fallback     *transport.FallbackTransport
 	Retry        *engine.RetryConfig
 
-	// 【修复遗漏1】连接池配置
+	// 连接池配置
 	PoolConfig *engine.PoolConfig
 
 	// 远程代理配置 (Xlink 借力机制)
@@ -47,7 +47,6 @@ func NewNodeConfig(
 	vmode verify.Mode,
 	logger *zap.Logger,
 ) *NodeConfig {
-	// 【修复硬伤1】支持 socks5-out 传输层
 	var t transport.Transport
 	if nodeCfg.Transport == "socks5-out" || nodeCfg.Transport == "socks5out" {
 		t = transport.GetWithConfig(
@@ -65,13 +64,11 @@ func NewNodeConfig(
 		Host:      nodeCfg.TransportOpts.WSHost,
 		UserAgent: profile.UserAgent,
 		Headers:   nodeCfg.TransportOpts.WSHeaders,
-		// 【修复硬伤1】传递 SOCKS5-Out 配置
 		SOCKS5OutAddr:     nodeCfg.TransportOpts.SOCKS5Addr,
 		SOCKS5OutUsername: nodeCfg.TransportOpts.SOCKS5Username,
 		SOCKS5OutPassword: nodeCfg.TransportOpts.SOCKS5Password,
 	}
 
-	// H2 和 WS 模式统一使用相同的配置
 	if t.Name() == "h2" || t.Name() == "ws" {
 		if nodeCfg.TransportOpts.H2Path != "" {
 			tcfg.Path = nodeCfg.TransportOpts.H2Path
@@ -100,17 +97,17 @@ func NewNodeConfig(
 	nc.RemoteSOCKS5 = nodeCfg.RemoteProxy.SOCKS5
 	nc.RemoteFallback = nodeCfg.RemoteProxy.Fallback
 
-	// 【修复硬伤3】设置重试配置，包含 Jitter
+	// 设置重试配置
 	if nodeCfg.Retry.MaxAttempts > 1 {
 		nc.Retry = &engine.RetryConfig{
 			MaxAttempts: nodeCfg.Retry.MaxAttempts,
 			BaseDelay:   nodeCfg.Retry.ParseBaseDelay(),
 			MaxDelay:    nodeCfg.Retry.ParseMaxDelay(),
-			Jitter:      nodeCfg.Retry.GetJitter(), // 【新增】使用配置的 Jitter
+			Jitter:      nodeCfg.Retry.GetJitter(),
 		}
 	}
 
-	// 【修复遗漏1】设置连接池配置，从配置文件读取而非硬编码
+	// 设置连接池配置
 	nc.PoolConfig = &engine.PoolConfig{
 		MaxIdle:     nodeCfg.Pool.GetMaxIdle(),
 		MaxPerKey:   nodeCfg.Pool.GetMaxPerKey(),
@@ -133,7 +130,7 @@ type TunnelStats struct {
 	TotalErrors int64
 }
 
-// ProxyIPSelector ProxyIP选择器接口（用于遗漏3的集成）
+// ProxyIPSelector ProxyIP选择器接口
 type ProxyIPSelector interface {
 	Select() *ProxyIPEntry
 	MarkFailed(address string)
@@ -151,20 +148,22 @@ type TunnelManager struct {
 	Node            *NodeConfig
 	Logger          *zap.Logger
 	Pool            *engine.ConnPool
-	ProxyIPSelector ProxyIPSelector // 【修复遗漏3】ProxyIP选择器
-	stats           TunnelStats
+	ProxyIPSelector ProxyIPSelector
+
+	// 原子计数器 — 实时统计
+	activeConns int64
+	totalConns  int64
+	totalBytes  int64
+	totalErrors int64
 }
 
 // NewTunnelManager 创建隧道管理器
-// 【修复遗漏1】使用配置文件中的 pool 参数
 func NewTunnelManager(node *NodeConfig, logger *zap.Logger) *TunnelManager {
 	var pool *engine.ConnPool
 
-	// 使用节点配置的连接池参数
 	if node.PoolConfig != nil {
 		pool = engine.NewConnPoolWithConfig(*node.PoolConfig)
 	} else {
-		// 兜底：使用默认配置
 		pool = engine.NewConnPool(10, 90*time.Second)
 	}
 
@@ -176,35 +175,34 @@ func NewTunnelManager(node *NodeConfig, logger *zap.Logger) *TunnelManager {
 }
 
 // NewTunnelManagerWithProxyIP 创建带 ProxyIP 支持的隧道管理器
-// 【修复遗漏3】集成 ProxyIP 管理器
 func NewTunnelManagerWithProxyIP(node *NodeConfig, logger *zap.Logger, selector ProxyIPSelector) *TunnelManager {
 	tm := NewTunnelManager(node, logger)
 	tm.ProxyIPSelector = selector
 	return tm
 }
 
-// Stats 获取统计信息
+// Stats 获取统计信息 — 原子读取
 func (t *TunnelManager) Stats() TunnelStats {
 	return TunnelStats{
-		ActiveConns: atomic.LoadInt64(&t.stats.ActiveConns),
-		TotalConns:  atomic.LoadInt64(&t.stats.TotalConns),
-		TotalBytes:  atomic.LoadInt64(&t.stats.TotalBytes),
-		TotalErrors: atomic.LoadInt64(&t.stats.TotalErrors),
+		ActiveConns: atomic.LoadInt64(&t.activeConns),
+		TotalConns:  atomic.LoadInt64(&t.totalConns),
+		TotalBytes:  atomic.LoadInt64(&t.totalBytes),
+		TotalErrors: atomic.LoadInt64(&t.totalErrors),
 	}
 }
 
 // HandleConnect 处理连接请求
 func (t *TunnelManager) HandleConnect(clientConn net.Conn, target, domain string) {
-	atomic.AddInt64(&t.stats.TotalConns, 1)
-	atomic.AddInt64(&t.stats.ActiveConns, 1)
-	defer atomic.AddInt64(&t.stats.ActiveConns, -1)
+	atomic.AddInt64(&t.totalConns, 1)
+	atomic.AddInt64(&t.activeConns, 1)
+	defer atomic.AddInt64(&t.activeConns, -1)
 
 	t.Logger.Info("tunnel: new connection",
 		zap.String("target", target),
 		zap.String("domain", domain),
 	)
 
-	// 【修复遗漏3】如果配置了 ProxyIP 选择器，使用动态选择的地址
+	// 如果配置了 ProxyIP 选择器，使用动态选择的地址
 	nodeAddr := t.Node.Address
 	nodeSNI := t.Node.SNI
 
@@ -235,7 +233,7 @@ func (t *TunnelManager) HandleConnect(clientConn net.Conn, target, domain string
 			t.Node.TransportCfg,
 		)
 		if err != nil {
-			atomic.AddInt64(&t.stats.TotalErrors, 1)
+			atomic.AddInt64(&t.totalErrors, 1)
 			t.markProxyIPFailed(nodeAddr)
 			t.Logger.Error("tunnel: all transports failed",
 				zap.String("node", t.Node.Name),
@@ -257,10 +255,10 @@ func (t *TunnelManager) HandleConnect(clientConn net.Conn, target, domain string
 			zap.Strings("alpn", alpn),
 		)
 
-		// 拨号连接
-		tlsConn, dialErr := t.dialDirect(nodeAddr, nodeSNI, alpn)
+		// 通过连接池拨号
+		tlsConn, dialErr := t.dialNode(nodeAddr, nodeSNI, alpn)
 		if dialErr != nil {
-			atomic.AddInt64(&t.stats.TotalErrors, 1)
+			atomic.AddInt64(&t.totalErrors, 1)
 			t.markProxyIPFailed(nodeAddr)
 			t.Logger.Error("tunnel: dial failed",
 				zap.String("node", t.Node.Name),
@@ -284,7 +282,7 @@ func (t *TunnelManager) HandleConnect(clientConn net.Conn, target, domain string
 		stream, err = activeTransport.Wrap(tlsConn, transportCfg)
 		if err != nil {
 			tlsConn.Close()
-			atomic.AddInt64(&t.stats.TotalErrors, 1)
+			atomic.AddInt64(&t.totalErrors, 1)
 			t.markProxyIPFailed(nodeAddr)
 			t.Logger.Error("tunnel: transport wrap failed",
 				zap.String("node", t.Node.Name),
@@ -326,7 +324,7 @@ func (t *TunnelManager) HandleConnect(clientConn net.Conn, target, domain string
 		)
 	case "raw":
 		if err := t.sendHTTPConnect(stream, target); err != nil {
-			atomic.AddInt64(&t.stats.TotalErrors, 1)
+			atomic.AddInt64(&t.totalErrors, 1)
 			t.Logger.Error("tunnel: send CONNECT failed", zap.Error(err))
 			return
 		}
@@ -339,7 +337,7 @@ func (t *TunnelManager) HandleConnect(clientConn net.Conn, target, domain string
 	)
 
 	n := t.relay(clientConn, stream)
-	atomic.AddInt64(&t.stats.TotalBytes, n)
+	atomic.AddInt64(&t.totalBytes, n)
 
 	t.Logger.Info("tunnel: relay finished",
 		zap.String("target", target),
@@ -361,29 +359,14 @@ func (t *TunnelManager) markProxyIPSuccess(address string) {
 	}
 }
 
-func (t *TunnelManager) dialDirect(address, sni string, alpn []string) (net.Conn, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-
-	result, err := engine.Dial(ctx, &engine.DialConfig{
-		Address:    address,
-		SNI:        sni,
-		Profile:    t.Node.Profile,
-		VerifyMode: t.Node.VerifyMode,
-		ALPN:       alpn,
-		Retry:      t.Node.Retry,
-	})
-	if err != nil {
-		return nil, err
-	}
-	return result.Conn, nil
-}
-
+// dialNode 通过连接池拨号 — 根据 address|sni|alpn 生成 poolKey 复用连接
 func (t *TunnelManager) dialNode(address, sni string, alpn []string) (net.Conn, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	poolKey := fmt.Sprintf("%s:%s:%v", address, sni, alpn)
+	// 按 address|profile|alpn 生成 Key，确保连接池真正复用
+	poolKey := fmt.Sprintf("%s|%s|%s|%v", address, sni, t.Node.Profile.Name, alpn)
+
 	conn, err := t.Pool.Get(ctx, poolKey, &engine.DialConfig{
 		Address:    address,
 		SNI:        sni,
