@@ -37,6 +37,10 @@ type ConnPool struct {
 	closed bool
 
 	expiredCount int64
+
+	// doneCh 用于通知 cleanup 协程退出，由 closeOnce 保护
+	doneCh    chan struct{}
+	closeOnce sync.Once
 }
 
 type poolEntry struct {
@@ -69,7 +73,6 @@ func NewConnPool(maxIdle int, idleTimeout time.Duration) *ConnPool {
 
 // NewConnPoolWithConfig creates a connection pool with full configuration.
 func NewConnPoolWithConfig(cfg PoolConfig) *ConnPool {
-	// 应用默认值
 	if cfg.MaxIdle <= 0 {
 		cfg.MaxIdle = 10
 	}
@@ -84,8 +87,9 @@ func NewConnPoolWithConfig(cfg PoolConfig) *ConnPool {
 	}
 
 	p := &ConnPool{
-		conns: make(map[string][]*poolEntry),
-		cfg:   cfg,
+		conns:  make(map[string][]*poolEntry),
+		cfg:    cfg,
+		doneCh: make(chan struct{}),
 	}
 	go p.cleanup()
 	return p
@@ -233,45 +237,55 @@ func (p *ConnPool) Remove(key string, entry *poolEntry) {
 	}
 }
 
+// cleanup 定时清理过期连接 — 通过 doneCh 实现秒退
 func (p *ConnPool) cleanup() {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		p.mu.Lock()
-		if p.closed {
-			p.mu.Unlock()
+	for {
+		select {
+		case <-p.doneCh:
 			return
-		}
+		case <-ticker.C:
+			p.mu.Lock()
+			if p.closed {
+				p.mu.Unlock()
+				return
+			}
 
-		now := time.Now()
-		for key, entries := range p.conns {
-			var active []*poolEntry
-			for _, entry := range entries {
-				if entry.inUse {
+			now := time.Now()
+			for key, entries := range p.conns {
+				var active []*poolEntry
+				for _, entry := range entries {
+					if entry.inUse {
+						active = append(active, entry)
+						continue
+					}
+					if now.Sub(entry.lastUsed) > p.cfg.IdleTimeout ||
+						now.Sub(entry.createdAt) > p.cfg.MaxLifetime {
+						entry.conn.Close()
+						atomic.AddInt64(&p.expiredCount, 1)
+						continue
+					}
 					active = append(active, entry)
-					continue
 				}
-				if now.Sub(entry.lastUsed) > p.cfg.IdleTimeout ||
-					now.Sub(entry.createdAt) > p.cfg.MaxLifetime {
-					entry.conn.Close()
-					atomic.AddInt64(&p.expiredCount, 1)
-					continue
+				if len(active) > 0 {
+					p.conns[key] = active
+				} else {
+					delete(p.conns, key)
 				}
-				active = append(active, entry)
 			}
-			if len(active) > 0 {
-				p.conns[key] = active
-			} else {
-				delete(p.conns, key)
-			}
+			p.mu.Unlock()
 		}
-		p.mu.Unlock()
 	}
 }
 
-// Close closes all pooled connections.
+// Close closes all pooled connections and stops the cleanup goroutine.
 func (p *ConnPool) Close() {
+	p.closeOnce.Do(func() {
+		close(p.doneCh)
+	})
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.closed = true
