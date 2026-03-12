@@ -61,6 +61,7 @@ type SOCKS5Server struct {
 	udpConn    *net.UDPConn
 	wg         sync.WaitGroup
 	closeCh    chan struct{}
+	closeOnce  sync.Once // 防止重复关闭 closeCh
 
 	// Metrics
 	activeConns int64
@@ -251,16 +252,33 @@ func (s *SOCKS5Server) handleUDP() {
 	}
 }
 
-// Stop 停止服务器
+// Stop 停止服务器 — 带 8 秒超时熔断，用 sync.Once 防止重复关闭
 func (s *SOCKS5Server) Stop() {
-	close(s.closeCh)
+	s.closeOnce.Do(func() {
+		close(s.closeCh)
+	})
+
 	if s.listener != nil {
 		s.listener.Close()
 	}
 	if s.udpConn != nil {
 		s.udpConn.Close()
 	}
-	s.wg.Wait()
+
+	// 带超时的等待，防止卡死
+	done := make(chan struct{})
+	go func() {
+		s.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// 正常退出
+	case <-time.After(8 * time.Second):
+		s.Logger.Warn("socks5: stop timed out after 8s, forcing shutdown")
+	}
+
 	s.Logger.Info("socks5 server stopped",
 		zap.Int64("total_connections", atomic.LoadInt64(&s.totalConns)))
 }
@@ -355,7 +373,6 @@ func (s *SOCKS5Server) selectAuthMethod(methods []byte) byte {
 		}
 	}
 
-	// 如果需要认证但客户端不支持
 	if needAuth {
 		return socks5AuthNoAccept
 	}
@@ -364,14 +381,12 @@ func (s *SOCKS5Server) selectAuthMethod(methods []byte) byte {
 }
 
 func (s *SOCKS5Server) doUserPassAuth(conn net.Conn) bool {
-	// 读取版本
 	ver := make([]byte, 1)
 	if _, err := io.ReadFull(conn, ver); err != nil || ver[0] != userPassVersion {
 		_, _ = conn.Write([]byte{userPassVersion, 0x01})
 		return false
 	}
 
-	// 读取用户名
 	ulenBuf := make([]byte, 1)
 	if _, err := io.ReadFull(conn, ulenBuf); err != nil {
 		_, _ = conn.Write([]byte{userPassVersion, 0x01})
@@ -383,7 +398,6 @@ func (s *SOCKS5Server) doUserPassAuth(conn net.Conn) bool {
 		return false
 	}
 
-	// 读取密码
 	plenBuf := make([]byte, 1)
 	if _, err := io.ReadFull(conn, plenBuf); err != nil {
 		_, _ = conn.Write([]byte{userPassVersion, 0x01})
@@ -395,7 +409,6 @@ func (s *SOCKS5Server) doUserPassAuth(conn net.Conn) bool {
 		return false
 	}
 
-	// 验证
 	if s.AuthConfig == nil ||
 		string(username) != s.AuthConfig.Username ||
 		string(password) != s.AuthConfig.Password {
