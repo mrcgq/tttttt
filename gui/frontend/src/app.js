@@ -1,6 +1,6 @@
 /**
  * TLS-Client GUI 桌面版主应用
- * 版本: v4.3 - 字段名严格对齐 types.go
+ * 版本: v4.4 - 字段名严格对齐 types.go (含 json tag 修复)
  */
 const App = {
   currentPage: 'dashboard',
@@ -243,7 +243,9 @@ const App = {
       // 同步客户端行为配置
       if (fullConfig.client_behavior) {
         if (fullConfig.client_behavior.cadence) {
-          this.state.cadenceMode = fullConfig.client_behavior.cadence.mode || 'none';
+          const rawMode = fullConfig.client_behavior.cadence.mode || 'none';
+          // 后端 "custom" → 前端 "sequence"
+          this.state.cadenceMode = (rawMode === 'custom') ? 'sequence' : rawMode;
           this.state.cadenceJitter = fullConfig.client_behavior.cadence.jitter || 0.3;
           this.state.cadenceMin = fullConfig.client_behavior.cadence.min_delay || '';
           this.state.cadenceMax = fullConfig.client_behavior.cadence.max_delay || '';
@@ -306,15 +308,25 @@ const App = {
   },
 
   // ================================================================
-  // 构建完整配置对象 — 字段对齐 types.go
+  // 构建完整配置对象 — 字段对齐 types.go (含 json tag)
   // ================================================================
   buildFullConfig() {
     const s = this.state;
 
+    // 解析 cadenceSeq 为数组
     let sequenceArray = [];
     if (s.cadenceSeq && s.cadenceSeq.trim()) {
       sequenceArray = s.cadenceSeq.split(',').map(v => v.trim()).filter(v => v);
     }
+
+    // cadenceMode 映射: 前端 "sequence" → 后端 "custom"
+    let backendCadenceMode = s.cadenceMode;
+    if (backendCadenceMode === 'sequence') {
+      backendCadenceMode = 'custom';
+    }
+
+    // weights: types.go 里是 []int，直接传数组
+    const weightsArray = Array.isArray(s.rotationWeights) ? s.rotationWeights : [];
 
     return {
       global: {
@@ -341,7 +353,7 @@ const App = {
           profile: s.selectedFingerprint,
           profiles: s.fingerprints.map(f => f.name),
           interval: s.rotationInterval || '',
-          weights: s.rotationWeights || [],
+          weights: weightsArray,
         },
       },
       tls: {
@@ -353,7 +365,7 @@ const App = {
       },
       client_behavior: {
         cadence: {
-          mode: s.cadenceMode,
+          mode: backendCadenceMode,
           jitter: s.cadenceJitter,
           min_delay: s.cadenceMin,
           max_delay: s.cadenceMax,
@@ -568,7 +580,7 @@ const App = {
     }
 
     this.navigate(this.currentPage);
-    this.log('info', 'TLS-Client 桌面版 v4.3 已加载');
+    this.log('info', 'TLS-Client 桌面版 v4.4 已加载');
     this.log('info', `${this.state.fingerprints.length} 个指纹, ${this.state.nodes.length} 个节点`);
   }
 };
