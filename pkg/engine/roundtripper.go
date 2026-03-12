@@ -166,6 +166,8 @@ func (t *FingerprintTransport) getCachedH2Client(host string) *h2.Client {
 		return nil
 	}
 	if entry.client.IsClosed() {
+		// 已关闭的 client 先 Close() 确保资源释放，再删除
+		entry.client.Close()
 		delete(t.h2Clients, host)
 		return nil
 	}
@@ -176,6 +178,7 @@ func (t *FingerprintTransport) removeCachedH2Client(host string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if entry, ok := t.h2Clients[host]; ok {
+		// 强行 Close() 终止 readLoop 协程，防止泄漏
 		entry.client.Close()
 		delete(t.h2Clients, host)
 	}
@@ -196,6 +199,10 @@ func (t *FingerprintTransport) roundTripH2(host string, conn net.Conn, profile *
 	t.mu.Lock()
 	if t.h2Clients == nil {
 		t.h2Clients = make(map[string]*h2ClientEntry)
+	}
+	// 如果已有旧的 client，先关闭
+	if oldEntry, exists := t.h2Clients[host]; exists {
+		oldEntry.client.Close()
 	}
 	t.h2Clients[host] = &h2ClientEntry{client: client, profile: profile}
 	t.mu.Unlock()
@@ -225,6 +232,7 @@ func (t *FingerprintTransport) CloseIdleConnections() {
 	defer t.mu.Unlock()
 	t.closed = true
 	for host, entry := range t.h2Clients {
+		// 强行 Close() 终止 readLoop 协程
 		entry.client.Close()
 		delete(t.h2Clients, host)
 	}
