@@ -79,7 +79,7 @@ func applyDefaults(cfg *Config) {
 		cfg.TLS.VerifyMode = "sni-skip"
 	}
 
-	// 【修复硬伤2】ClientBehavior 默认值
+	// ClientBehavior 默认值
 	if cfg.ClientBehavior.Cadence.Mode == "" {
 		cfg.ClientBehavior.Cadence.Mode = "none"
 	}
@@ -90,12 +90,12 @@ func applyDefaults(cfg *Config) {
 		cfg.ClientBehavior.MaxRedirects = 10
 	}
 
-	// 【修复遗漏2】API 默认值
+	// API 默认值
 	if cfg.API.Listen == "" {
 		cfg.API.Listen = "127.0.0.1:9090"
 	}
 
-	// 【修复遗漏2】Health 默认值
+	// Health 默认值
 	if cfg.Health.Interval == "" {
 		cfg.Health.Interval = "5m"
 	}
@@ -112,7 +112,7 @@ func applyDefaults(cfg *Config) {
 		cfg.Health.TestURL = "http://www.gstatic.com/generate_204"
 	}
 
-	// 【修复遗漏3】ProxyIPs 默认值
+	// ProxyIPs 默认值
 	if cfg.ProxyIPs.Mode == "" {
 		cfg.ProxyIPs.Mode = "latency"
 	}
@@ -132,12 +132,12 @@ func applyDefaults(cfg *Config) {
 			cfg.Nodes[i].Transport = "raw"
 		}
 
-		// 【修复硬伤3】Retry.Jitter 默认值
+		// Retry.Jitter 默认值
 		if cfg.Nodes[i].Retry.Jitter == 0 {
 			cfg.Nodes[i].Retry.Jitter = 0.2
 		}
 
-		// 【修复遗漏1】Pool 默认值
+		// Pool 默认值
 		if cfg.Nodes[i].Pool.MaxIdle == 0 {
 			cfg.Nodes[i].Pool.MaxIdle = 10
 		}
@@ -191,7 +191,7 @@ func validate(cfg *Config) error {
 			cfg.Fingerprint.Rotation.Mode)
 	}
 
-	// 【修复硬伤2】验证时序模式
+	// 验证时序模式
 	validCadenceModes := map[string]bool{
 		"none": true, "browsing": true, "fast": true, "aggressive": true,
 		"random": true, "custom": true, "sequence": true,
@@ -201,7 +201,7 @@ func validate(cfg *Config) error {
 			cfg.ClientBehavior.Cadence.Mode)
 	}
 
-	// 【修复遗漏3】验证ProxyIP选择模式
+	// 验证ProxyIP选择模式
 	validProxyIPModes := map[string]bool{
 		"round-robin": true, "random": true, "latency": true,
 		"weighted": true, "failover": true,
@@ -227,67 +227,29 @@ func validate(cfg *Config) error {
 			return fmt.Errorf("node %q: sni is required", n.Name)
 		}
 
-		// 【修复硬伤1】添加 socks5-out 到有效传输列表
 		validTransports := map[string]bool{
 			"raw": true, "ws": true, "h2": true,
 			"websocket": true, "http2": true,
 			"direct": true, "tcp": true,
-			"socks5-out": true, "socks5out": true, // 【新增】
+			"socks5-out": true, "socks5out": true,
 		}
 		normalized := strings.ToLower(n.Transport)
 		if !validTransports[normalized] {
 			return fmt.Errorf("node %q: unknown transport %q", n.Name, n.Transport)
 		}
 
-		// 【修复硬伤1】当使用 socks5-out 时，必须配置 socks5_addr
+		// 当使用 socks5-out 时，必须配置 socks5_addr
 		if (normalized == "socks5-out" || normalized == "socks5out") &&
 			n.TransportOpts.SOCKS5Addr == "" {
 			return fmt.Errorf("node %q: transport socks5-out requires transport_opts.socks5_addr", n.Name)
 		}
 
-		// 【修复硬伤3】验证 Jitter 范围
+		// 验证 Jitter 范围
 		if n.Retry.Jitter < 0 || n.Retry.Jitter > 1 {
 			return fmt.Errorf("node %q: retry.jitter must be between 0 and 1, got %f",
 				n.Name, n.Retry.Jitter)
 		}
 	}
 
-	return nil
-}
-
-func (cfg *Config) ActiveNode() *NodeConfig {
-	for i := range cfg.Nodes {
-		if cfg.Nodes[i].Active {
-			return &cfg.Nodes[i]
-		}
-	}
-	if len(cfg.Nodes) > 0 {
-		return &cfg.Nodes[0]
-	}
-	return nil
-}
-
-// ActiveNodes 返回所有激活的节点
-func (cfg *Config) ActiveNodes() []*NodeConfig {
-	var nodes []*NodeConfig
-	for i := range cfg.Nodes {
-		if cfg.Nodes[i].Active {
-			nodes = append(nodes, &cfg.Nodes[i])
-		}
-	}
-	// 如果没有显式激活的节点，返回第一个
-	if len(nodes) == 0 && len(cfg.Nodes) > 0 {
-		nodes = append(nodes, &cfg.Nodes[0])
-	}
-	return nodes
-}
-
-// GetNodeByName 按名称获取节点
-func (cfg *Config) GetNodeByName(name string) *NodeConfig {
-	for i := range cfg.Nodes {
-		if cfg.Nodes[i].Name == name {
-			return &cfg.Nodes[i]
-		}
-	}
 	return nil
 }
