@@ -6,16 +6,19 @@ on:
   pull_request:
     branches: [main]
 
+# 全局环境变量，适用于所有 jobs
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  GO_VERSION: "1.24.x"
+
 jobs:
   lint:
     runs-on: ubuntu-latest
-    env: # <-- 添加 env 块在这里
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.24.x"
+          go-version: ${{ env.GO_VERSION }}
       
       # 确保 webui 目录存在
       - name: Ensure webui directory exists
@@ -31,13 +34,11 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
-    env: # <-- 添加 env 块在这里
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.24.x"
+          go-version: ${{ env.GO_VERSION }}
       
       # 确保 webui 目录存在
       - name: Ensure webui directory exists
@@ -54,19 +55,17 @@ jobs:
         uses: codecov/codecov-action@v4
         with:
           files: coverage.txt
-        env: # <-- 这里有一个嵌套的 env，它只对 codecov-action 生效，是正确的
+        env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
         continue-on-error: true
 
   security:
     runs-on: ubuntu-latest
-    env: # <-- 添加 env 块在这里
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.24.x"
+          go-version: ${{ env.GO_VERSION }}
       
       # 确保 webui 目录存在
       - name: Ensure webui directory exists
@@ -78,21 +77,34 @@ jobs:
       
       - name: Install govulncheck
         run: go install golang.org/x/vuln/cmd/govulncheck@latest
+      
       - name: Run vulnerability check
         run: |
           echo "Running govulncheck (informational only)..."
           govulncheck ./... 2>&1 || true
           echo "✅ Security scan complete (some stdlib vulnerabilities require Go 1.24+)"
+      
+      - name: Install gosec
+        run: go install github.com/securego/gosec/v2/cmd/gosec@latest
+      
+      - name: Run gosec security scanner
+        run: |
+          echo "Running gosec security scanner..."
+          # 排除已知的误报规则：
+          # G107: Url provided to HTTP request as taint input (http.ReadRequest 误报)
+          # G114: Use of net/http serve functions (标准库使用)
+          # G304: File path provided as taint input (配置文件读取)
+          # G404: Insecure random number source (非密码学用途)
+          gosec -exclude=G104,G107,G114,G304,G404 -exclude-dir=testdata ./... 2>&1 || true
+          echo "✅ Gosec scan complete"
 
   verify-webui-embed:
     runs-on: ubuntu-latest
-    env: # <-- 添加 env 块在这里
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.24.x"
+          go-version: ${{ env.GO_VERSION }}
       - name: Verify WebUI files exist
         run: |
           echo "=== Checking WebUI static files ==="
@@ -142,13 +154,11 @@ jobs:
             goarch: amd64
           - goos: freebsd
             goarch: amd64
-    env: # <-- 添加 env 块在这里
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.24.x"
+          go-version: ${{ env.GO_VERSION }}
       
       # 确保 webui 目录存在
       - name: Ensure webui directory exists
@@ -171,13 +181,11 @@ jobs:
   build-artifacts:
     needs: [verify-webui-embed]
     runs-on: ubuntu-latest
-    env: # <-- 添加 env 块在这里
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.24.x"
+          go-version: ${{ env.GO_VERSION }}
       
       # 确保 webui 目录存在
       - name: Ensure webui directory exists
@@ -238,13 +246,11 @@ jobs:
 
   integration-fingerprint:
     runs-on: ubuntu-latest
-    env: # <-- 添加 env 块在这里
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.24.x"
+          go-version: ${{ env.GO_VERSION }}
       
       # 确保 webui 目录存在
       - name: Ensure webui directory exists
