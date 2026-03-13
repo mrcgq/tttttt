@@ -15,7 +15,43 @@ type Config struct {
 	ProxyIPs       ProxyIPPoolConfig    `yaml:"proxy_ips" json:"proxy_ips"`
 }
 
-// 注意：ActiveNode() 和 ActiveNodes() 方法已在 config.go 中定义，此处不再重复
+// ActiveNode 返回第一个 active=true 的节点，无则返回第一个节点
+func (c *Config) ActiveNode() *NodeConfig {
+	for i := range c.Nodes {
+		if c.Nodes[i].Active {
+			return &c.Nodes[i]
+		}
+	}
+	if len(c.Nodes) > 0 {
+		return &c.Nodes[0]
+	}
+	return nil
+}
+
+// ActiveNodes 返回所有 active=true 的节点（指针切片，修改可反映到原数据）
+// 如果没有显式激活的节点，返回第一个
+func (c *Config) ActiveNodes() []*NodeConfig {
+	var result []*NodeConfig
+	for i := range c.Nodes {
+		if c.Nodes[i].Active {
+			result = append(result, &c.Nodes[i])
+		}
+	}
+	if len(result) == 0 && len(c.Nodes) > 0 {
+		result = append(result, &c.Nodes[0])
+	}
+	return result
+}
+
+// GetNodeByName 按名称获取节点，未找到返回 nil
+func (c *Config) GetNodeByName(name string) *NodeConfig {
+	for i := range c.Nodes {
+		if c.Nodes[i].Name == name {
+			return &c.Nodes[i]
+		}
+	}
+	return nil
+}
 
 // GlobalConfig 全局配置
 type GlobalConfig struct {
