@@ -189,7 +189,7 @@ func runProxy(cmd *cobra.Command, args []string) error {
 	globalConfigManager.apiServer = components.apiServer
 	globalConfigManager.proxyIPMgr = components.proxyIPMgr
 
-	// 【新增】将隧道统计注入 API Server，让仪表盘显示真实数据
+	// 将隧道统计注入 API Server，让仪表盘显示真实数据
 	if components.apiServer != nil && components.tunnel != nil {
 		components.apiServer.SetTunnelStats(&tunnelStatsAdapter{tunnel: components.tunnel})
 	}
@@ -204,13 +204,13 @@ func runProxy(cmd *cobra.Command, args []string) error {
 		switch sig {
 		case syscall.SIGHUP:
 			logger.Info("received SIGHUP, reloading configuration")
-			newCfg, err := config.Load(configPath)
-			if err != nil {
-				logger.Error("failed to reload config", zap.Error(err))
+			newCfg, loadErr := config.Load(configPath)
+			if loadErr != nil {
+				logger.Error("failed to reload config", zap.Error(loadErr))
 				continue
 			}
-			if err := globalConfigManager.Update(newCfg); err != nil {
-				logger.Error("failed to update config", zap.Error(err))
+			if updateErr := globalConfigManager.Update(newCfg); updateErr != nil {
+				logger.Error("failed to update config", zap.Error(updateErr))
 			}
 		case syscall.SIGINT, syscall.SIGTERM:
 			logger.Info("shutting down", zap.String("signal", sig.String()))
@@ -278,11 +278,11 @@ func initComponents(
 
 	// Cookie 管理器
 	if cfg.ClientBehavior.Cookies.Enabled {
-		var err error
-		comp.cookieMgr, err = engine.NewCookieManager()
-		if err != nil {
-			logger.Warn("failed to create cookie manager", zap.Error(err))
+		cookieMgr, cookieErr := engine.NewCookieManager()
+		if cookieErr != nil {
+			logger.Warn("failed to create cookie manager", zap.Error(cookieErr))
 		} else {
+			comp.cookieMgr = cookieMgr
 			logger.Info("cookie management enabled",
 				zap.Bool("clear_on_rotation", cfg.ClientBehavior.Cookies.ClearOnRotation),
 			)
@@ -322,7 +322,7 @@ func initComponents(
 		)
 	}
 
-	// API Server — 热重载时复用
+	// API Server — 热重载时复用，不重建
 	if isReload && existingAPI != nil {
 		comp.apiServer = existingAPI
 		logger.Info("api server reused (hot reload)")
@@ -333,8 +333,8 @@ func initComponents(
 		}
 		comp.apiServer.SetConfigManager(globalConfigManager)
 
-		if err := comp.apiServer.Start(); err != nil {
-			logger.Error("failed to start api server", zap.Error(err))
+		if startErr := comp.apiServer.Start(); startErr != nil {
+			logger.Error("failed to start api server", zap.Error(startErr))
 		} else {
 			logger.Info("api server started",
 				zap.String("listen", cfg.API.Listen),
@@ -418,16 +418,16 @@ func initComponents(
 		} else {
 			comp.socks5 = inbound.NewSOCKS5Server(cfg.Inbound.SOCKS5.Listen, logger, onConnect)
 		}
-		if err := comp.socks5.Start(); err != nil {
-			return nil, err
+		if startErr := comp.socks5.Start(); startErr != nil {
+			return nil, startErr
 		}
 		logger.Info("socks5 server started", zap.String("listen", cfg.Inbound.SOCKS5.Listen))
 	}
 
 	if cfg.Inbound.HTTP.Listen != "" {
 		comp.httpProxy = inbound.NewHTTPProxyServer(cfg.Inbound.HTTP.Listen, logger, onConnect)
-		if err := comp.httpProxy.Start(); err != nil {
-			return nil, err
+		if startErr := comp.httpProxy.Start(); startErr != nil {
+			return nil, startErr
 		}
 		logger.Info("http proxy server started", zap.String("listen", cfg.Inbound.HTTP.Listen))
 	}
@@ -439,7 +439,7 @@ func initComponents(
 // 关闭组件
 // ================================================================
 
-// shutdownComponents 完全关闭（包括 API Server）
+// shutdownComponents 完全关闭（包括 API Server）— 用于进程退出
 func shutdownComponents(comp *Components, logger *zap.Logger) {
 	if comp == nil {
 		return
@@ -465,8 +465,8 @@ func shutdownComponents(comp *Components, logger *zap.Logger) {
 		logger.Debug("health checker stopped")
 	}
 	if comp.apiServer != nil {
-		if err := comp.apiServer.Stop(); err != nil {
-			logger.Error("api server stop error", zap.Error(err))
+		if stopErr := comp.apiServer.Stop(); stopErr != nil {
+			logger.Error("api server stop error", zap.Error(stopErr))
 		}
 		logger.Debug("api server stopped")
 	}
@@ -504,7 +504,7 @@ func shutdownReloadableComponents(comp *Components, logger *zap.Logger) {
 }
 
 // ================================================================
-// 重载循环
+// 重载循环 — 【核心修复】先停旧组件释放端口，再启新组件
 // ================================================================
 
 func reloadLoop(ctx context.Context, cm *ConfigManager, logger *zap.Logger) {
@@ -529,14 +529,10 @@ func reloadLoop(ctx context.Context, cm *ConfigManager, logger *zap.Logger) {
 				continue
 			}
 
-			// isReload=true，复用 existingAPI
-			newComp, err := initComponents(ctx, newCfg, selector, vmode, logger, true, existingAPI)
-			if err != nil {
-				logger.Error("failed to init new components, keeping old config", zap.Error(err))
-				continue
-			}
-
-			// 关闭旧的可重载组件（不关闭 API Server）
+			// ==========================================
+			// 【核心修复】第一步：先关闭旧的可重载组件，释放端口
+			// 必须在 initComponents 之前执行，否则新组件无法绑定相同端口
+			// ==========================================
 			oldComp := &Components{
 				socks5:     cm.socks5Server,
 				httpProxy:  cm.httpServer,
@@ -546,6 +542,52 @@ func reloadLoop(ctx context.Context, cm *ConfigManager, logger *zap.Logger) {
 			}
 			shutdownReloadableComponents(oldComp, logger)
 
+			// 清空引用，防止二次关闭
+			cm.socks5Server = nil
+			cm.httpServer = nil
+			cm.tunnel = nil
+			cm.healthChecker = nil
+			cm.proxyIPMgr = nil
+
+			logger.Info("old components shut down, ports released")
+
+			// ==========================================
+			// 【核心修复】第二步：端口释放完毕，用新配置启动新组件
+			// ==========================================
+			newComp, initErr := initComponents(ctx, newCfg, selector, vmode, logger, true, existingAPI)
+			if initErr != nil {
+				logger.Error("CRITICAL: failed to init new components after shutdown, engine is DOWN",
+					zap.Error(initErr),
+				)
+				// 尝试用旧配置回滚恢复
+				oldCfg := cm.Get()
+				if oldCfg != nil {
+					logger.Warn("attempting rollback to previous config...")
+					oldSelector, selErr := initFingerprintSelector(oldCfg)
+					if selErr == nil {
+						oldVmode, vmErr := verify.ParseMode(oldCfg.TLS.VerifyMode)
+						if vmErr == nil {
+							rollbackComp, rbErr := initComponents(ctx, oldCfg, oldSelector, oldVmode, logger, true, existingAPI)
+							if rbErr == nil {
+								cm.socks5Server = rollbackComp.socks5
+								cm.httpServer = rollbackComp.httpProxy
+								cm.tunnel = rollbackComp.tunnel
+								cm.healthChecker = rollbackComp.checker
+								cm.proxyIPMgr = rollbackComp.proxyIPMgr
+								if cm.apiServer != nil && rollbackComp.tunnel != nil {
+									cm.apiServer.SetTunnelStats(&tunnelStatsAdapter{tunnel: rollbackComp.tunnel})
+								}
+								logger.Info("rollback successful, engine restored with previous config")
+								continue
+							}
+							logger.Error("rollback also failed", zap.Error(rbErr))
+						}
+					}
+				}
+				logger.Error("engine is in a stopped state, manual restart required")
+				continue
+			}
+
 			// 更新引用
 			cm.socks5Server = newComp.socks5
 			cm.httpServer = newComp.httpProxy
@@ -553,7 +595,7 @@ func reloadLoop(ctx context.Context, cm *ConfigManager, logger *zap.Logger) {
 			cm.healthChecker = newComp.checker
 			cm.proxyIPMgr = newComp.proxyIPMgr
 
-			// 【新增】将最新的隧道统计注入 API Server，让仪表盘显示真实数据
+			// 将最新的隧道统计注入 API Server，让仪表盘显示真实数据
 			if cm.apiServer != nil && newComp.tunnel != nil {
 				cm.apiServer.SetTunnelStats(&tunnelStatsAdapter{tunnel: newComp.tunnel})
 			}
