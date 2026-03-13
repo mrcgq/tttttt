@@ -12,6 +12,11 @@ on:
       - 'gui/**'
   workflow_dispatch:
 
+# 全局环境变量
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  GO_VERSION: "1.24.x"
+
 jobs:
   build-gui:
     strategy:
@@ -29,14 +34,12 @@ jobs:
             output: tls-client-gui-linux-amd64
 
     runs-on: ${{ matrix.os }}
-    env: # <-- 将 env 块放在这里，与 runs-on 平级，且比 steps 少一个缩进层级
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.24.x"
+          go-version: ${{ env.GO_VERSION }}
       
       - name: Install Wails
         run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
@@ -72,8 +75,6 @@ jobs:
   combine-artifacts:
     needs: build-gui
     runs-on: ubuntu-latest
-    env: # <-- 同样在这里为这个 job 设置 env
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
