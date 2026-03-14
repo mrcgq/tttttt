@@ -458,18 +458,21 @@ const NodesPage = {
     node.pool.maxPerKey = parseInt(g(`edit-pool-perkey-${index}`)) || 5;
     node.pool.idleTimeout = g(`edit-pool-timeout-${index}`) || '120s';
     node.pool.maxLifetime = g(`edit-pool-life-${index}`) || '10m';
-
+    
+	// gui/frontend/src/pages/nodes.js 中的 saveEdit 函数末尾
     const success = await App.pushConfigToEngine();
 
     if (success) {
       this.editingNode = null;
-      App.renderPage('nodes');
-      App.log('info', '修改节点: ' + node.name);
+      // 🚀 修复：前端稍等 1 秒，等后端把旧连接杀干净、新连接建好，再刷新界面
+      setTimeout(() => {
+        App.renderPage('nodes');
+        App.log('info', '修改节点: ' + node.name);
+      }, 1000); 
     } else {
       App.state.nodes[index] = oldNode;
       App.toast('保存失败，已回滚', 'error');
     }
-  },
 
   async activate(index) {
     const oldActiveIndex = App.state.nodes.findIndex(n => n.active);
@@ -530,3 +533,6 @@ const NodesPage = {
     }
   }
 };
+
+
+
