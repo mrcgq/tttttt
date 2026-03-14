@@ -209,7 +209,7 @@ const NodesPage = {
     const rp = node.remoteProxy || {};
     const retry = node.retry || {};
     const pool = node.pool || {};
-    const fallback = node.transportFallback || [];
+    const fallback = node.transportFallback ||[];
 
     return `
 <div class="node-edit-form visible" id="node-edit-${index}">
@@ -350,7 +350,7 @@ const NodesPage = {
     if (App.state.nodes.find(n => n.name === name)) { App.toast('节点名称已存在', 'error'); return; }
 
     const tfbStr = document.getElementById('new-node-transport-fallback')?.value?.trim() || '';
-    const transportFallback = tfbStr ? tfbStr.split(',').map(s => s.trim()).filter(s => s) : [];
+    const transportFallback = tfbStr ? tfbStr.split(',').map(s => s.trim()).filter(s => s) :[];
 
     const node = {
       name,
@@ -393,16 +393,18 @@ const NodesPage = {
 
     if (success) {
       this.resetAddForm();
-      App.renderPage('nodes');
-      App.log('info', '添加节点: ' + name);
+      // 这里也同样加一个微小延迟，防止后端还没准备好前端就刷新
+      setTimeout(() => {
+        App.renderPage('nodes');
+        App.log('info', '添加节点: ' + name);
+      }, 500);
     } else {
       App.state.nodes.pop();
       App.toast('添加节点失败，已回滚', 'error');
     }
   },
 
-  resetAddForm() {
-    ['new-node-name','new-node-address','new-node-sni','new-node-ws-path','new-node-ws-host',
+  resetAddForm() {['new-node-name','new-node-address','new-node-sni','new-node-ws-path','new-node-ws-host',
      'new-node-h2-path','new-node-socks5out','new-node-socks5out-user','new-node-socks5out-pass',
      'new-node-remote-socks5','new-node-remote-fallback','new-node-transport-fallback'].forEach(id => {
       const el = document.getElementById(id);
@@ -445,7 +447,7 @@ const NodesPage = {
     node.remoteProxy.fallback = g(`edit-rfb-${index}`);
 
     const tfbStr = g(`edit-tfb-${index}`);
-    node.transportFallback = tfbStr ? tfbStr.split(',').map(s => s.trim()).filter(s => s) : [];
+    node.transportFallback = tfbStr ? tfbStr.split(',').map(s => s.trim()).filter(s => s) :[];
 
     if (!node.retry) node.retry = {};
     node.retry.maxAttempts = parseInt(g(`edit-retry-max-${index}`)) || 3;
@@ -459,12 +461,14 @@ const NodesPage = {
     node.pool.idleTimeout = g(`edit-pool-timeout-${index}`) || '120s';
     node.pool.maxLifetime = g(`edit-pool-life-${index}`) || '10m';
     
-	// gui/frontend/src/pages/nodes.js 中的 saveEdit 函数末尾
+    // ==========================================
+    // 修复：确保大括号闭合！
+    // ==========================================
     const success = await App.pushConfigToEngine();
 
     if (success) {
       this.editingNode = null;
-      // 🚀 修复：前端稍等 1 秒，等后端把旧连接杀干净、新连接建好，再刷新界面
+      // 延迟刷新以等待后端重载完成
       setTimeout(() => {
         App.renderPage('nodes');
         App.log('info', '修改节点: ' + node.name);
@@ -473,6 +477,7 @@ const NodesPage = {
       App.state.nodes[index] = oldNode;
       App.toast('保存失败，已回滚', 'error');
     }
+  }, // <---- 之前就是漏了这个大括号！
 
   async activate(index) {
     const oldActiveIndex = App.state.nodes.findIndex(n => n.active);
@@ -482,8 +487,11 @@ const NodesPage = {
     const success = await App.pushConfigToEngine();
 
     if (success) {
-      App.renderPage('nodes');
-      App.log('info', '激活节点: ' + App.state.nodes[index].name);
+      // 这里也同样加一个微小延迟
+      setTimeout(() => {
+        App.renderPage('nodes');
+        App.log('info', '激活节点: ' + App.state.nodes[index].name);
+      }, 500);
     } else {
       App.state.nodes.forEach((n, i) => n.active = (i === oldActiveIndex));
       App.toast('激活失败，已回滚', 'error');
@@ -505,8 +513,11 @@ const NodesPage = {
     const success = await App.pushConfigToEngine();
 
     if (success) {
-      App.renderPage('nodes');
-      App.log('warn', '删除节点: ' + name);
+      // 这里也同样加一个微小延迟
+      setTimeout(() => {
+        App.renderPage('nodes');
+        App.log('warn', '删除节点: ' + name);
+      }, 500);
     } else {
       App.state.nodes.splice(index, 0, deletedNode);
       App.toast('删除失败，已回滚', 'error');
@@ -533,6 +544,3 @@ const NodesPage = {
     }
   }
 };
-
-
-
