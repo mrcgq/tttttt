@@ -472,7 +472,7 @@ const App = {
   },
 
   // ================================================================
-  // 初始化应用
+  // 初始化应用 (gui/frontend/src/app.js)
   // ================================================================
   async init() {
     document.getElementById('sidebar-toggle')?.addEventListener('click', () => {
@@ -582,6 +582,32 @@ const App = {
     this.navigate(this.currentPage);
     this.log('info', 'TLS-Client 桌面版 v4.4 已加载');
     this.log('info', `${this.state.fingerprints.length} 个指纹, ${this.state.nodes.length} 个节点`);
+
+    // ================================================================
+    // 🚀 终极体验优化：实现“零点击”全自动启动
+    // ================================================================
+    setTimeout(async () => {
+      if (window.go && window.go.main && window.go.main.App) {
+        try {
+          // 1. 先尝试静默连接一次 API (万一内核已经由其他方式启动了，或者是在热重载)
+          await API.getStatus();
+          this.log('info', '检测到 API 已在线，跳过自动启动');
+          // 连上了就触发正常的数据同步
+          API.connected = true;
+          this.updateApiIndicator(true);
+          await this.fetchAndApplyConfig();
+          API.startPolling((data) => {
+            if (data && DashboardPage.updateFromAPI) DashboardPage.updateFromAPI(data);
+          }, 2000);
+        } catch (e) {
+          // 2. 如果连不上 API (报错了)，说明本地内核还没起，触发全自动启动！
+          this.log('info', 'API 未响应，正在全自动拉取本地内核...');
+          if (DashboardPage && DashboardPage.startLocal) {
+            DashboardPage.startLocal(); // 直接复用仪表盘里的“启动本地引擎”逻辑
+          }
+        }
+      }
+    }, 500); // 稍微延迟 500ms，等 UI 渲染完毕再执行
   }
 };
 
