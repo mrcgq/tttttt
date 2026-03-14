@@ -103,7 +103,7 @@ func (s *HTTPProxyServer) Stop() {
 	select {
 	case <-done:
 		// 正常退出
-	case <-time.After(8 * time.Second):
+	case <-time.After(1 * time.Second):
 		s.Logger.Warn("httpproxy: stop timed out after 8s, forcing shutdown")
 	}
 
