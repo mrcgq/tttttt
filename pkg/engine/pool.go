@@ -257,21 +257,7 @@ func (p *ConnPool) Remove(key string, entry *poolEntry) {
 	}
 }
 
-// removeByConn removes a connection from the pool by net.Conn reference.
-func (p *ConnPool) removeByConn(key string, conn net.Conn) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	entries := p.conns[key]
-	for i, e := range entries {
-		if e.conn == conn {
-			e.conn.Close()
-			p.conns[key] = append(entries[:i], entries[i+1:]...)
-			return
-		}
-	}
-	// 如果不在池中，直接关闭
-	conn.Close()
-}
+
 
 // cleanup 定时清理过期连接 — 通过 doneCh 实现秒退
 func (p *ConnPool) cleanup() {
