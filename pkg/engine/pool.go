@@ -101,7 +101,7 @@ func (p *ConnPool) Get(ctx context.Context, key string, cfg *DialConfig) (net.Co
 
 	if p.closed {
 		p.mu.Unlock()
-		return p.dial(ctx, cfg)
+		return p.dialRaw(ctx, cfg)
 	}
 
 	entries := p.conns[key]
@@ -132,18 +132,20 @@ func (p *ConnPool) Get(ctx context.Context, key string, cfg *DialConfig) (net.Co
 		p.conns[key] = entries
 		p.mu.Unlock()
 
+		// 从池中取出的连接：Close() 时调用 Release() 标记为空闲
 		return &pooledConn{
-			Conn:  entry.conn,
-			pool:  p,
-			key:   key,
-			entry: entry,
+			Conn:     entry.conn,
+			pool:     p,
+			key:      key,
+			entry:    entry,
+			fromPool: true,
 		}, nil
 	}
 
 	p.conns[key] = entries
 	p.mu.Unlock()
 
-	return p.dial(ctx, cfg)
+	return p.dialPooled(ctx, key, cfg)
 }
 
 func (p *ConnPool) probeConnection(conn net.Conn) bool {
@@ -172,12 +174,30 @@ func (p *ConnPool) probeConnection(conn net.Conn) bool {
 	return false
 }
 
-func (p *ConnPool) dial(ctx context.Context, cfg *DialConfig) (net.Conn, error) {
+// dialRaw 拨号但不包装，用于池已关闭的场景
+func (p *ConnPool) dialRaw(ctx context.Context, cfg *DialConfig) (net.Conn, error) {
 	result, err := Dial(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
 	return result.Conn, nil
+}
+
+// dialPooled 拨号并包装为 pooledConn，Close() 时会放回池中
+func (p *ConnPool) dialPooled(ctx context.Context, key string, cfg *DialConfig) (net.Conn, error) {
+	result, err := Dial(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	// 新拨号的连接：Close() 时调用 Put() 放入池子
+	return &pooledConn{
+		Conn:     result.Conn,
+		pool:     p,
+		key:      key,
+		entry:    nil,
+		fromPool: false,
+	}, nil
 }
 
 // Put returns a connection to the pool for reuse.
@@ -235,6 +255,22 @@ func (p *ConnPool) Remove(key string, entry *poolEntry) {
 			return
 		}
 	}
+}
+
+// removeByConn removes a connection from the pool by net.Conn reference.
+func (p *ConnPool) removeByConn(key string, conn net.Conn) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	entries := p.conns[key]
+	for i, e := range entries {
+		if e.conn == conn {
+			e.conn.Close()
+			p.conns[key] = append(entries[:i], entries[i+1:]...)
+			return
+		}
+	}
+	// 如果不在池中，直接关闭
+	conn.Close()
 }
 
 // cleanup 定时清理过期连接 — 通过 doneCh 实现秒退
@@ -326,7 +362,8 @@ type pooledConn struct {
 	net.Conn
 	pool     *ConnPool
 	key      string
-	entry    *poolEntry
+	entry    *poolEntry // 从池中取出时非 nil；新拨号时为 nil
+	fromPool bool       // true=池中取出, false=新拨号
 	released atomic.Bool
 }
 
@@ -334,7 +371,14 @@ func (c *pooledConn) Close() error {
 	if !c.released.CompareAndSwap(false, true) {
 		return nil
 	}
-	c.pool.Release(c.key, c.entry)
+
+	if c.fromPool {
+		// 从池中取出的连接：标记为空闲，放回原位
+		c.pool.Release(c.key, c.entry)
+	} else {
+		// 新拨号的连接：通过 Put() 加入池中复用
+		c.pool.Put(c.key, c.Conn)
+	}
 	return nil
 }
 
@@ -343,7 +387,14 @@ func (c *pooledConn) CloseWithError() error {
 	if !c.released.CompareAndSwap(false, true) {
 		return nil
 	}
-	c.pool.Remove(c.key, c.entry)
+
+	if c.fromPool {
+		// 从池中取出的：从 map 中移除并关闭
+		c.pool.Remove(c.key, c.entry)
+	} else {
+		// 新拨号的：直接物理关闭，不放入池
+		c.Conn.Close()
+	}
 	return nil
 }
 
